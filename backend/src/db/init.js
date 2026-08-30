@@ -1,42 +1,42 @@
 // ============================================================
-// CryptoChess - Database Initialization (SQLite)
+// CryptoChess - Database Init (sql.js)
 // ============================================================
 
+const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
-const Database = require('better-sqlite3');
 
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '..', '..', 'data', 'cryptochess.db');
 
-// Ensure data directory
-const dataDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
+async function init() {
+  const SQL = await initSqlJs();
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+  const dataDir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-// Read and execute schema
-const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-
-// Split by semicolons and execute each statement
-const statements = schema
-  .split(';')
-  .map(s => s.trim())
-  .filter(s => s.length > 0 && !s.startsWith('--'));
-
-for (const stmt of statements) {
-  try {
-    db.exec(stmt + ';');
-  } catch (err) {
-    console.error(`Error executing: ${stmt.substring(0, 60)}...`);
-    console.error(err.message);
+  let db;
+  if (fs.existsSync(DB_PATH)) {
+    const buffer = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
   }
+
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA foreign_keys = ON');
+
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+  const statements = schema.split(';').map(s => s.trim()).filter(s => s.length > 0 && !s.startsWith('--'));
+
+  for (const stmt of statements) {
+    try { db.run(stmt + ';'); } catch (e) { /* ignore */ }
+  }
+
+  const data = db.export();
+  fs.writeFileSync(DB_PATH, Buffer.from(data));
+  db.close();
+
+  console.log('✅ Database initialized at:', DB_PATH);
 }
 
-console.log('✅ Database initialized successfully at:', DB_PATH);
-console.log('   Tables: players, games, transactions, commission_pool, sweep_orders, matchmaking_queue');
-
-db.close();
+init().catch(err => { console.error('Init failed:', err); process.exit(1); });

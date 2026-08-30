@@ -1,9 +1,8 @@
 // ============================================================
-// CryptoChess - Escrow Service (SQLite + Wallet-Based)
-// Manages all balance operations
+// CryptoChess - Escrow Service (sql.js + Wallet-Based)
 // ============================================================
 
-const { db, query } = require('../db/connection');
+const { query, saveDB } = require('../db/connection');
 
 const COMMISSION_RATE = 0.03;
 
@@ -18,7 +17,7 @@ async function getBalance(walletAddress) {
 
 async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
   try {
-    db.exec('BEGIN');
+    query('BEGIN');
 
     const whiteResult = query(
       `UPDATE players SET balance_usdc = balance_usdc - $1, updated_at = datetime('now')
@@ -27,7 +26,7 @@ async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
       [stakeAmount, whiteWallet]
     );
     if (whiteResult.rows.length === 0) {
-      db.exec('ROLLBACK');
+      query('ROLLBACK');
       throw new Error('Insufficient balance for white player');
     }
 
@@ -38,23 +37,19 @@ async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
       [stakeAmount, blackWallet]
     );
     if (blackResult.rows.length === 0) {
-      // Refund white
       query(
         `UPDATE players SET balance_usdc = balance_usdc + $1, updated_at = datetime('now')
          WHERE wallet_address = $2`,
         [stakeAmount, whiteWallet]
       );
-      db.exec('ROLLBACK');
+      query('ROLLBACK');
       throw new Error('Insufficient balance for black player');
     }
 
     const totalPot = stakeAmount * 2;
     const commission = parseFloat((totalPot * COMMISSION_RATE).toFixed(6));
 
-    query(
-      `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
-      [gameId]
-    );
+    query(`UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`, [gameId]);
 
     query(
       `INSERT INTO transactions (wallet_address, type, amount_usdc, game_id, description)
@@ -67,26 +62,18 @@ async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
       [blackWallet, -stakeAmount, gameId]
     );
 
-    query(
-      `UPDATE players SET total_wagered_usdc = total_wagered_usdc + $1 WHERE wallet_address = $2`,
-      [stakeAmount, whiteWallet]
-    );
-    query(
-      `UPDATE players SET total_wagered_usdc = total_wagered_usdc + $1 WHERE wallet_address = $2`,
-      [stakeAmount, blackWallet]
-    );
+    query(`UPDATE players SET total_wagered_usdc = total_wagered_usdc + $1 WHERE wallet_address = $2`, [stakeAmount, whiteWallet]);
+    query(`UPDATE players SET total_wagered_usdc = total_wagered_usdc + $1 WHERE wallet_address = $2`, [stakeAmount, blackWallet]);
 
-    query(
-      `INSERT INTO commission_pool (amount_usdc, game_id) VALUES ($1, $2)`,
-      [commission, gameId]
-    );
+    query(`INSERT INTO commission_pool (amount_usdc, game_id) VALUES ($1, $2)`, [commission, gameId]);
 
-    db.exec('COMMIT');
+    query('COMMIT');
+    saveDB();
 
     console.log(`[ESCROW] Wager locked: ${stakeAmount} USDC each | Pot: ${totalPot} | Commission: ${commission}`);
     return { gameId, totalPot, commission };
   } catch (err) {
-    try { db.exec('ROLLBACK'); } catch {}
+    try { query('ROLLBACK'); } catch {}
     console.error('[ESCROW] lockWager failed:', err.message);
     throw err;
   }
@@ -94,14 +81,14 @@ async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
 
 async function settleGame(gameId, winnerWallet = null) {
   try {
-    db.exec('BEGIN');
+    query('BEGIN');
 
     const gameResult = query(
       `SELECT * FROM games WHERE id = $1 AND status IN ('active', 'waiting')`,
       [gameId]
     );
     if (gameResult.rows.length === 0) {
-      db.exec('ROLLBACK');
+      query('ROLLBACK');
       throw new Error('Game not found or already settled');
     }
 
@@ -133,20 +120,17 @@ async function settleGame(gameId, winnerWallet = null) {
       [winnerWallet, gameId]
     );
 
-    const wallets = [game.white_wallet, game.black_wallet];
-    for (const w of wallets) {
-      query(
-        `UPDATE players SET total_games_played = total_games_played + 1 WHERE wallet_address = $1`,
-        [w]
-      );
+    for (const w of [game.white_wallet, game.black_wallet]) {
+      query(`UPDATE players SET total_games_played = total_games_played + 1 WHERE wallet_address = $1`, [w]);
     }
 
-    db.exec('COMMIT');
+    query('COMMIT');
+    saveDB();
 
     console.log(`[ESCROW] Game ${gameId} settled | Winner: ${winnerWallet?.slice(0, 8) || 'draw'} | Payout: ${payout}`);
     return { payout, commission };
   } catch (err) {
-    try { db.exec('ROLLBACK'); } catch {}
+    try { query('ROLLBACK'); } catch {}
     console.error('[ESCROW] settleGame failed:', err.message);
     throw err;
   }
@@ -154,14 +138,14 @@ async function settleGame(gameId, winnerWallet = null) {
 
 async function settleDraw(gameId) {
   try {
-    db.exec('BEGIN');
+    query('BEGIN');
 
     const gameResult = query(
       `SELECT * FROM games WHERE id = $1 AND status IN ('active', 'waiting')`,
       [gameId]
     );
     if (gameResult.rows.length === 0) {
-      db.exec('ROLLBACK');
+      query('ROLLBACK');
       throw new Error('Game not found');
     }
 
@@ -184,23 +168,20 @@ async function settleDraw(gameId) {
       );
     }
 
-    query(
-      `UPDATE games SET status = 'completed', updated_at = datetime('now') WHERE id = $1`,
-      [gameId]
-    );
-
+    query(`UPDATE games SET status = 'completed', updated_at = datetime('now') WHERE id = $1`, [gameId]);
     query(
       `UPDATE players SET total_games_played = total_games_played + 1
        WHERE wallet_address IN ($1, $2)`,
       [game.white_wallet, game.black_wallet]
     );
 
-    db.exec('COMMIT');
+    query('COMMIT');
+    saveDB();
 
     console.log(`[ESCROW] Draw settled: ${gameId} | Refund: ${refund} each`);
     return { refund };
   } catch (err) {
-    try { db.exec('ROLLBACK'); } catch {}
+    try { query('ROLLBACK'); } catch {}
     throw err;
   }
 }

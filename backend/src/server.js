@@ -24,7 +24,7 @@ const { authenticateSocket } = require('./middleware/auth');
 const escrow = require('./services/escrow');
 const matchmaking = require('./services/matchmaking');
 const changenow = require('./services/changenow');
-const { query } = require('./db/connection');
+const { query, initDB } = require('./db/connection');
 
 // ============================================================
 // Initialize Express & HTTP Server
@@ -550,6 +550,8 @@ io.on('connection', (socket) => {
 // ============================================================
 const PORT = process.env.PORT || 3001;
 
+// Initialize database then start server
+initDB().then(() => {
 server.listen(PORT, () => {
   console.log(`\n  ╔══════════════════════════════════════════╗`);
   console.log(`  ║       ♚ CryptoChess (Wallet-Only) ♚     ║`);
@@ -576,3 +578,4 @@ process.on('SIGINT', () => {
 });
 
 module.exports = { app, server, io };
+}); // end initDB().then
