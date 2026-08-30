@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.local
+.env.production
+.next/
+.vercel/
+.freebuff/
+*.log
+dist/
+build/
+.DS_Store
+Thumbs.db
