@@ -187,7 +187,13 @@ export default function LobbyPage() {
 
   if (!walletAddress || !player) return null;
 
-  // Payment Lock Screen overlay
+  // If matched but no platform wallet configured, go straight to game
+  if (pendingGame && !PLATFORM_WALLET) {
+    router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
+    return null;
+  }
+
+  // Payment Lock Screen overlay (only when platform wallet is set)
   if (pendingGame && PLATFORM_WALLET) {
     return (
       <PaymentLockScreen

@@ -5,7 +5,7 @@
 
 CREATE TABLE IF NOT EXISTS players (
   wallet_address TEXT PRIMARY KEY,
-  balance_usdc REAL DEFAULT 100.00,
+  balance_usdc REAL DEFAULT 0.00,
   total_games_played INTEGER DEFAULT 0,
   total_games_won INTEGER DEFAULT 0,
   total_earnings_usdc REAL DEFAULT 0.00,

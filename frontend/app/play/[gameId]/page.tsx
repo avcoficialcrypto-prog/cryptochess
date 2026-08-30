@@ -62,7 +62,7 @@ export default function GamePage() {
 
     const socket = getSocket(walletAddress);
     socketRef.current = socket;
-    socket.emit('challenge:join', { gameId });
+    socket.emit('game:join', { gameId });
 
     const handleGameState = (state: any) => {
       if (state.fen) { try { chess.load(state.fen); setBoardFen(state.fen); } catch {} }

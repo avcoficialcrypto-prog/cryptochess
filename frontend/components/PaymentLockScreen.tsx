@@ -153,10 +153,10 @@ export default function PaymentLockScreen({
               `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001'}/api/solana/verify`,
               {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${localStorage.getItem('crypto_chess_token')}`,
-                },
+              headers: {
+                'Content-Type': 'application/json',
+                'x-wallet-address': localStorage.getItem('cryptochess_wallet') || '',
+              },
                 body: JSON.stringify({
                   signature,
                   expectedAmount: amount,

@@ -38,22 +38,19 @@ router.post('/connect', async (req, res) => {
     let isNew = false;
 
     if (result.rows.length === 0) {
-      // New player — create with 100 USDC welcome bonus
+      // New player — create with 0 USDC balance (no welcome bonus)
       result = await query(
         `INSERT INTO players (wallet_address, balance_usdc)
-         VALUES ($1, 100.00)
-         RETURNING *`,
+         VALUES ($1, 0.00)`,
+        [walletAddress]
+      );
+      // Re-fetch to get all columns
+      result = await query(
+        'SELECT * FROM players WHERE wallet_address = $1',
         [walletAddress]
       );
       player = result.rows[0];
       isNew = true;
-
-      // Log welcome bonus transaction
-      await query(
-        `INSERT INTO transactions (wallet_address, type, amount_usdc, description)
-         VALUES ($1, 'welcome_bonus', 100.00, 'Welcome bonus')`,
-        [walletAddress]
-      );
 
       console.log(`[AUTH] New player connected: ${walletAddress.slice(0, 8)}...`);
     } else {

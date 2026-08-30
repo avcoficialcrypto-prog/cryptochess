@@ -1,5 +1,5 @@
 // ============================================================
-// CryptoChess - Wallet Routes (Wallet-Based)
+// CryptoChess - Wallet Routes (SQLite-Compatible)
 // GET  /api/wallet/balance — Get balance
 // POST /api/wallet/deposit — Deposit USDC (demo mode)
 // GET  /api/wallet/transactions — Transaction history
@@ -20,7 +20,7 @@ router.use(authenticateWallet);
  */
 router.get('/balance', async (req, res) => {
   try {
-    const result = await query(
+    const result = query(
       'SELECT wallet_address, balance_usdc FROM players WHERE wallet_address = $1',
       [req.walletAddress]
     );
@@ -38,7 +38,6 @@ router.get('/balance', async (req, res) => {
 /**
  * POST /api/wallet/deposit
  * Demo mode: instant balance increase
- * Production: would verify on-chain USDC deposit
  */
 router.post('/deposit', async (req, res) => {
   try {
@@ -49,28 +48,28 @@ router.post('/deposit', async (req, res) => {
     }
 
     // Ensure player exists
-    await query(
-      `INSERT INTO players (wallet_address, balance_usdc)
-       VALUES ($1, 0) ON CONFLICT (wallet_address) DO NOTHING`,
+    query(
+      `INSERT OR IGNORE INTO players (wallet_address, balance_usdc)
+       VALUES ($1, 0)`,
       [req.walletAddress]
     );
 
     // Add balance
-    await query(
-      `UPDATE players SET balance_usdc = balance_usdc + $1, updated_at = NOW()
+    query(
+      `UPDATE players SET balance_usdc = balance_usdc + $1, updated_at = datetime('now')
        WHERE wallet_address = $2`,
       [amount, req.walletAddress]
     );
 
     // Log transaction
-    await query(
+    query(
       `INSERT INTO transactions (wallet_address, type, amount_usdc, description)
        VALUES ($1, 'deposit', $2, $3)`,
       [req.walletAddress, amount, `Deposited ${amount} USDC (demo)`]
     );
 
     // Get updated balance
-    const result = await query(
+    const result = query(
       'SELECT wallet_address, balance_usdc FROM players WHERE wallet_address = $1',
       [req.walletAddress]
     );
@@ -95,7 +94,7 @@ router.get('/transactions', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    const result = await query(
+    const result = query(
       `SELECT * FROM transactions
        WHERE wallet_address = $1
        ORDER BY created_at DESC
@@ -103,14 +102,14 @@ router.get('/transactions', async (req, res) => {
       [req.walletAddress, limit, offset]
     );
 
-    const countResult = await query(
-      'SELECT COUNT(*) FROM transactions WHERE wallet_address = $1',
+    const countResult = query(
+      'SELECT COUNT(*) as cnt FROM transactions WHERE wallet_address = $1',
       [req.walletAddress]
     );
 
     res.json({
       transactions: result.rows,
-      total: parseInt(countResult.rows[0].count),
+      total: parseInt(countResult.rows[0]?.cnt || '0'),
       page,
       limit,
     });
@@ -121,17 +120,18 @@ router.get('/transactions', async (req, res) => {
 
 /**
  * GET /api/wallet/stats
+ * SQLite-compatible (no ::DECIMAL cast, no NOW())
  */
 router.get('/stats', async (req, res) => {
   try {
-    const result = await query(
+    const result = query(
       `SELECT
         total_games_played,
         total_games_won,
         total_earnings_usdc,
         total_wagered_usdc,
         CASE WHEN total_games_played > 0
-          THEN ROUND((total_games_won::DECIMAL / total_games_played) * 100, 1)
+          THEN ROUND(CAST(total_games_won AS REAL) / total_games_played * 100, 1)
           ELSE 0
         END as win_rate,
         total_earnings_usdc - total_wagered_usdc as net_profit_usdc

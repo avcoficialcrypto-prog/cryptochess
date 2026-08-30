@@ -21,7 +21,7 @@ const es: TranslationKeys = {
     button: 'Conectar Phantom',
     installing: 'Instala Phantom para jugar',
     noBalance: 'Saldo USDC insuficiente',
-    welcomeBonus: 'Las billeteras nuevas reciben 100 USDC de bienvenida',
+    welcomeBonus: '',
     connected: 'Billetera Conectada',
     connecting: 'Conectando a Phantom...',
   },

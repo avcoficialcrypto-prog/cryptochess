@@ -29,7 +29,7 @@ router.post('/challenge', async (req, res) => {
     }
 
     // Check balance
-    const balanceResult = await query(
+    const balanceResult = query(
       'SELECT balance_usdc FROM players WHERE wallet_address = $1',
       [req.walletAddress]
     );
@@ -55,7 +55,7 @@ router.post('/challenge', async (req, res) => {
 
     // Lock the creator's wager
     await query(
-      `UPDATE players SET balance_usdc = balance_usdc - $1, updated_at = NOW()
+      `UPDATE players SET balance_usdc = balance_usdc - $1, updated_at = datetime('now')
        WHERE wallet_address = $2`,
       [stake, req.walletAddress]
     );

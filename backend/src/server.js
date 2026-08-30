@@ -20,11 +20,15 @@ const authRoutes = require('./routes/auth');
 const walletRoutes = require('./routes/wallet');
 const gameRoutes = require('./routes/games');
 const solanaRoutes = require('./routes/solana');
+const turnstileRoutes = require('./routes/turnstile');
 const { authenticateSocket } = require('./middleware/auth');
 const escrow = require('./services/escrow');
 const matchmaking = require('./services/matchmaking');
 const changenow = require('./services/changenow');
 const { query, initDB } = require('./db/connection');
+
+// Track which games each player is in (wallet -> Set<gameId>)
+const playerGames = new Map();
 
 // ============================================================
 // Initialize Express & HTTP Server
@@ -59,6 +63,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/solana', solanaRoutes);
+app.use('/api/turnstile', turnstileRoutes);
 
 /**
  * GET /health or /ping — Health check
@@ -196,8 +201,10 @@ io.on('connection', (socket) => {
           startTime: Date.now()
         });
 
-        // Join game room
+        // Join game rooms for both players
         socket.join(`game:${gameId}`);
+        const oppSocket = io.sockets.sockets.get(opponent.socketId);
+        if (oppSocket) oppSocket.join(`game:${gameId}`);
 
         // Notify opponent (black)
         io.to(opponent.socketId).emit('game:matched', {
@@ -285,9 +292,9 @@ io.on('connection', (socket) => {
         [socket.walletAddress, game.id]
       );
 
-      // Lock wagers
+      // Lock only the JOINER's wager (creator already paid when creating challenge)
       const stakeAmount = parseFloat(game.stake_amount);
-      await escrow.lockWager(game.white_wallet, socket.walletAddress, stakeAmount, game.id);
+      await escrow.lockChallengeJoiner(socket.walletAddress, stakeAmount, game.id);
 
       // Initialize chess game
       const chess = new Chess();
@@ -508,6 +515,40 @@ io.on('connection', (socket) => {
     const target = gameData.white.wallet === socket.walletAddress
       ? gameData.black.socketId : gameData.white.socketId;
     if (target) io.to(target).emit('game:draw-declined');
+  });
+
+  // --------------------------------------------------------
+  // JOIN EXISTING GAME (for reconnection / game page load)
+  // --------------------------------------------------------
+  socket.on('game:join', (data) => {
+    const { gameId } = data;
+    const gameData = activeGames.get(gameId);
+    if (!gameData) {
+      socket.emit('game:error', { error: 'Game not found or already finished' });
+      return;
+    }
+
+    // Update socket ID for this player
+    if (gameData.white.wallet === socket.walletAddress) {
+      gameData.white.socketId = socket.id;
+    } else if (gameData.black.wallet === socket.walletAddress) {
+      gameData.black.socketId = socket.id;
+    } else {
+      socket.emit('game:error', { error: 'Not a player in this game' });
+      return;
+    }
+
+    socket.join(`game:${gameId}`);
+
+    // Send current state
+    socket.emit('game:state', {
+      fen: gameData.chess.fen(),
+      turn: gameData.chess.turn(),
+      moveNumber: gameData.chess.moveNumber(),
+      status: 'active',
+      whitePlayer: gameData.white.wallet.slice(0, 6) + '...' + gameData.white.wallet.slice(-4),
+      blackPlayer: gameData.black.wallet.slice(0, 6) + '...' + gameData.black.wallet.slice(-4),
+    });
   });
 
   // --------------------------------------------------------

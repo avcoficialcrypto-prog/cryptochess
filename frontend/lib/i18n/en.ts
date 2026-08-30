@@ -20,7 +20,7 @@ const en = {
     button: 'Connect Phantom',
     installing: 'Install Phantom to play',
     noBalance: 'Insufficient USDC balance',
-    welcomeBonus: 'New wallets receive 100 USDC welcome bonus',
+    welcomeBonus: '',
     connected: 'Wallet Connected',
     connecting: 'Connecting to Phantom...',
   },

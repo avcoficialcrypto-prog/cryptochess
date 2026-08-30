@@ -38,10 +38,17 @@ async function initDB() {
   // Load and execute schema
   const schemaPath = path.join(__dirname, 'schema.sql');
   if (fs.existsSync(schemaPath)) {
-    const schema = fs.readFileSync(schemaPath, 'utf-8');
-    const statements = schema.split(';').map(s => s.trim()).filter(s => s.length > 0 && !s.startsWith('--'));
+    const schema = fs.readFileSync(schemaPath, 'utf-8').replace(/\r\n/g, '\n');
+    // Split by semicolons but handle multi-line CREATE TABLE statements
+    const statements = schema.split(';').map(s => s.trim()).filter(s => {
+      if (s.length === 0) return false;
+      // Skip blocks that are ONLY comments (no actual SQL)
+      const nonCommentLines = s.split('\n').filter(l => l.trim().length > 0 && !l.trim().startsWith('--'));
+      if (nonCommentLines.length === 0) return false;
+      return true;
+    });
     for (const stmt of statements) {
-      try { db.run(stmt + ';'); } catch (e) { /* ignore duplicate table errors */ }
+      try { db.run(stmt + ';'); } catch (e) { console.warn('[DB] Schema warning:', e.message.substring(0, 80)); }
     }
   }
 
