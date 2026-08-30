@@ -52,7 +52,7 @@ export default function HomePage() {
         {/* Header */}
         <header className="flex items-center justify-between mb-16">
           <div className="flex items-center gap-3">
-            <span className="text-4xl">♚</span>
+            <img src="/logo.png" alt="CryptoChess" className="w-10 h-10 rounded-lg" />
             <span className="text-2xl font-bold text-gradient">{t.appName}</span>
           </div>
           <LanguageSwitcher />
@@ -110,7 +110,7 @@ export default function HomePage() {
           <div className="flex justify-center">
             <div className="card w-full max-w-md text-center">
               <div className="w-20 h-20 rounded-2xl bg-gold-400/10 flex items-center justify-center mx-auto mb-6">
-                <span className="text-4xl">♟</span>
+                <img src="/logo.png" alt="CryptoChess" className="w-10 h-10 rounded-xl" />
               </div>
 
               <h2 className="text-2xl font-bold mb-2">{t.connect.title}</h2>
@@ -184,7 +184,7 @@ function Dashboard({ player, walletAddress, disconnect, router }: {
         {/* Header */}
         <header className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">♚</span>
+            <img src="/logo.png" alt="CryptoChess" className="w-8 h-8 rounded-lg" />
             <span className="text-xl font-bold text-gradient">{t.appName}</span>
           </div>
 

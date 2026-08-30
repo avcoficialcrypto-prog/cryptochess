@@ -178,7 +178,7 @@ export default function GamePage() {
             <div className="card">
               <div className="flex items-center gap-3 mb-2">
                 <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${myColor === 'white' ? 'bg-dark-600' : 'bg-white/10'}`}>
-                  {myColor === 'white' ? '♟' : '♔'}
+                  {<img src="/logo.png" alt="" className="w-6 h-6 rounded" />}
                 </div>
                 <div>
                   <div className="text-sm text-white/40">{myColor === 'white' ? 'Black' : 'White'}</div>

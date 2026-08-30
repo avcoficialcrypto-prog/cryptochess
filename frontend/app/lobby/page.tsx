@@ -171,7 +171,7 @@ export default function LobbyPage() {
             <LanguageSwitcher />
           </div>
           <div className="text-center mb-8">
-            <span className="text-5xl mb-4 block">♚</span>
+            <img src="/logo.png" alt="CryptoChess" className="w-14 h-14 mx-auto rounded-xl mb-4" />
             <h1 className="text-3xl font-bold mb-2">{t.lobby.chooseMode}</h1>
             <p className="text-white/40">{t.lobby.selectHow}</p>
           </div>
