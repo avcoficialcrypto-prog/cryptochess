@@ -13,6 +13,8 @@ import { getSocket } from '@/lib/socket';
 import dynamic from 'next/dynamic';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import HypePhrases from '@/components/HypePhrases';
+import WinnerCelebration from '@/components/WinnerCelebration';
+import { sounds } from '@/lib/sounds';
 import { Chess } from 'chess.js';
 
 const Chessboard = dynamic(() => import('react-chessboard').then(m => m.Chessboard), {
@@ -70,8 +72,9 @@ export default function GamePage() {
         setPlayerWallets({ white: state.whitePlayer, black: state.blackPlayer });
         setOpponentWallet(myColor === 'white' ? state.blackPlayer : state.whitePlayer);
       }
-      if (state.isCheck !== undefined) setIsCheck(state.isCheck);
+      if (state.isCheck !== undefined) { setIsCheck(state.isCheck); if (state.isCheck) sounds.check(); }
       if (state.status === 'active') setGameStatus('playing');
+      sounds.gameStart();
       if (['checkmate', 'stalemate', 'draw', 'resigned', 'disconnected'].includes(state.status)) {
         setGameStatus('finished');
         setGameResult({

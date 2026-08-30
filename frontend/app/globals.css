@@ -2,11 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ============================================================
-   CryptoChess - Global Styles + Animations
-   Premium dark crypto-gaming aesthetic
-   ============================================================ */
-
+/* CryptoChess - Global Styles + Animations */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @layer base {
@@ -20,17 +16,8 @@
     --accent-green: #00ff88;
     --accent-red: #ff3366;
   }
-
-  html {
-    color-scheme: dark;
-    scroll-behavior: smooth;
-  }
-
-  body {
-    @apply bg-dark-950 text-white antialiased;
-    font-family: 'Inter', system-ui, sans-serif;
-  }
-
+  html { color-scheme: dark; scroll-behavior: smooth; }
+  body { @apply bg-dark-950 text-white antialiased; font-family: 'Inter', system-ui, sans-serif; }
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { @apply bg-dark-900; }
   ::-webkit-scrollbar-thumb { @apply bg-dark-500 rounded-full; }
@@ -38,240 +25,138 @@
 }
 
 /* ============================================================
-   ANIMATIONS
+   CHESSBOARD BACKGROUND (minimalist luxury, gray tones)
    ============================================================ */
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.chess-bg {
+  background-color: #0a0a0f;
+  background-image:
+    linear-gradient(45deg, rgba(255,255,255,0.012) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.012) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.012) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.012) 75%);
+  background-size: 80px 80px;
+  background-position: 0 0, 0 40px, 40px -40px, -40px 0px;
+}
+.chess-bg-subtle {
+  background-color: #0a0a0f;
+  background-image:
+    linear-gradient(45deg, rgba(255,255,255,0.008) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.008) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.008) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.008) 75%);
+  background-size: 120px 120px;
+  background-position: 0 0, 0 60px, 60px -60px, -60px 0px;
 }
 
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(24px); }
-  to { opacity: 1; transform: translateY(0); }
+/* ============================================================
+   ENTRANCE ANIMATION
+   ============================================================ */
+@keyframes entranceFade {
+  0% { opacity: 0; filter: blur(8px); transform: scale(0.95); }
+  100% { opacity: 1; filter: blur(0); transform: scale(1); }
 }
-
-@keyframes fadeInDown {
-  from { opacity: 0; transform: translateY(-24px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes entranceSlideUp {
+  0% { opacity: 0; transform: translateY(40px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
-
-@keyframes slideInLeft {
-  from { opacity: 0; transform: translateX(-40px); }
-  to { opacity: 1; transform: translateX(0); }
+@keyframes logoEntrance {
+  0% { opacity: 0; transform: scale(0.3) rotate(-180deg); filter: blur(10px); }
+  60% { opacity: 1; transform: scale(1.1) rotate(10deg); filter: blur(0); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); filter: blur(0); }
 }
+.animate-entrance { animation: entranceFade 0.8s cubic-bezier(0.4,0,0.2,1) both; }
+.animate-entrance-up { animation: entranceSlideUp 0.8s cubic-bezier(0.4,0,0.2,1) 0.2s both; }
+.animate-logo-entrance { animation: logoEntrance 1s cubic-bezier(0.4,0,0.2,1) both; }
 
-@keyframes slideInRight {
-  from { opacity: 0; transform: translateX(40px); }
-  to { opacity: 1; transform: translateX(0); }
+/* ============================================================
+   WINNER CELEBRATION
+   ============================================================ */
+@keyframes winnerPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
 }
-
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.9); }
-  to { opacity: 1; transform: scale(1); }
+@keyframes winnerGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(240, 185, 11, 0.3), 0 0 60px rgba(240, 185, 11, 0.1); }
+  50% { box-shadow: 0 0 40px rgba(240, 185, 11, 0.6), 0 0 100px rgba(240, 185, 11, 0.3); }
 }
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+@keyframes confettiFall {
+  0% { transform: translateY(-100vh) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
 }
-
-@keyframes gradientShift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+@keyframes starBurst {
+  0% { transform: scale(0) rotate(0deg); opacity: 1; }
+  50% { transform: scale(1.5) rotate(180deg); opacity: 0.8; }
+  100% { transform: scale(0) rotate(360deg); opacity: 0; }
 }
-
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 5px rgba(240, 185, 11, 0.3); }
-  50% { box-shadow: 0 0 25px rgba(240, 185, 11, 0.6), 0 0 50px rgba(240, 185, 11, 0.2); }
-}
-
-@keyframes pulseGlowGreen {
-  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 136, 0.3); }
-  50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.5), 0 0 50px rgba(0, 255, 136, 0.15); }
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  33% { transform: translateY(-12px) rotate(2deg); }
-  66% { transform: translateY(-6px) rotate(-1deg); }
-}
-
-@keyframes floatSlow {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(-20px) rotate(3deg); }
-}
-
-@keyframes rotateGlow {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-@keyframes particleDrift {
-  0% { transform: translate(0, 0) scale(1); opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
-  100% { transform: translate(var(--dx, 50px), var(--dy, -100px)) scale(0.3); opacity: 0; }
-}
-
-@keyframes chessFloat1 {
-  0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1); }
-  25% { transform: translate(15px, -20px) rotate(5deg) scale(1.05); }
-  50% { transform: translate(-10px, -35px) rotate(-3deg) scale(0.98); }
-  75% { transform: translate(20px, -15px) rotate(4deg) scale(1.02); }
-}
-
-@keyframes chessFloat2 {
-  0%, 100% { transform: translate(0, 0) rotate(0deg); }
-  33% { transform: translate(-20px, -25px) rotate(-6deg); }
-  66% { transform: translate(10px, -40px) rotate(4deg); }
-}
-
-@keyframes chessFloat3 {
-  0%, 100% { transform: translate(0, 0) rotate(0deg); }
-  50% { transform: translate(15px, -30px) rotate(8deg); }
-}
-
-@keyframes borderGlow {
-  0%, 100% { border-color: rgba(240, 185, 11, 0.1); }
-  50% { border-color: rgba(240, 185, 11, 0.4); }
-}
-
-@keyframes textGlow {
-  0%, 100% { text-shadow: 0 0 10px rgba(240, 185, 11, 0.3); }
-  50% { text-shadow: 0 0 20px rgba(240, 185, 11, 0.6), 0 0 40px rgba(240, 185, 11, 0.2); }
+.animate-winner-pulse { animation: winnerPulse 1s ease-in-out infinite; }
+.animate-winner-glow { animation: winnerGlow 2s ease-in-out infinite; }
+.confetti-piece {
+  position: fixed;
+  width: 10px;
+  height: 10px;
+  top: -10px;
+  animation: confettiFall var(--fall-duration, 3s) var(--fall-delay, 0s) linear forwards;
+  pointer-events: none;
+  z-index: 100;
 }
 
 /* ============================================================
    COMPONENT STYLES
    ============================================================ */
-
 @layer components {
-  /* Cards */
-  .card {
-    @apply bg-gradient-card rounded-2xl border border-white/5 shadow-card p-6;
-    animation: fadeIn 0.5s ease-out;
-  }
-
-  .card-glow {
-    @apply card relative overflow-hidden;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  .card-glow::before {
-    content: '';
-    @apply absolute inset-0 rounded-2xl opacity-0;
-    background: radial-gradient(circle at 50% 0%, rgba(240, 185, 11, 0.12), transparent 70%);
-    transition: opacity 0.4s ease;
-  }
-  .card-glow:hover::before {
-    @apply opacity-100;
-  }
-  .card-glow:hover {
-    @apply border-gold-400/20;
-    transform: translateY(-2px);
-    box-shadow: 0 8px 40px rgba(240, 185, 11, 0.08);
-  }
-
-  /* Buttons */
-  .btn-primary {
-    @apply bg-gradient-gold text-dark-950 font-bold px-6 py-3 rounded-xl
-           transition-all duration-300 active:scale-95
-           disabled:opacity-50 disabled:cursor-not-allowed;
-    position: relative;
-    overflow: hidden;
-  }
-  .btn-primary::before {
-    content: '';
-    @apply absolute inset-0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-    transform: translateX(-100%);
-    transition: transform 0.6s ease;
-  }
-  .btn-primary:hover::before {
-    transform: translateX(100%);
-  }
-  .btn-primary:hover {
-    box-shadow: 0 0 30px rgba(240, 185, 11, 0.4), 0 4px 20px rgba(240, 185, 11, 0.3);
-    transform: translateY(-1px);
-  }
-
-  .btn-secondary {
-    @apply bg-dark-600 text-white font-medium px-6 py-3 rounded-xl
-           border border-white/10 transition-all duration-300 active:scale-95;
-  }
-  .btn-secondary:hover {
-    @apply bg-dark-500 border-white/20;
-    transform: translateY(-1px);
-  }
-
-  .btn-danger {
-    @apply bg-neon-red/10 text-neon-red font-medium px-6 py-3 rounded-xl
-           border border-neon-red/30 transition-all duration-300 active:scale-95;
-  }
-  .btn-danger:hover {
-    @apply bg-neon-red/20;
-    box-shadow: 0 0 20px rgba(255, 51, 102, 0.2);
-  }
-
-  .btn-neon {
-    @apply bg-neon-green/10 text-neon-green font-bold px-6 py-3 rounded-xl
-           border border-neon-green/30 transition-all duration-300 active:scale-95;
-    animation: pulseGlowGreen 3s ease-in-out infinite;
-  }
-  .btn-neon:hover {
-    @apply bg-neon-green/20;
-    box-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
-    transform: translateY(-1px);
-  }
-
-  /* Stake buttons */
-  .stake-btn {
-    @apply relative bg-dark-700 border-2 border-white/10 rounded-xl px-6 py-4
-           text-center cursor-pointer transition-all duration-300;
-  }
-  .stake-btn:hover {
-    @apply border-gold-400/50 bg-dark-600;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 20px rgba(240, 185, 11, 0.1);
-  }
-  .stake-btn.active {
-    @apply border-gold-400 bg-gold-400/10;
-    animation: pulseGlow 2s ease-in-out infinite;
-  }
-
-  /* Inputs */
-  .input-dark {
-    @apply bg-dark-700 border border-white/10 rounded-xl px-4 py-3 text-white
-           placeholder:text-white/30 transition-all duration-300;
-  }
-  .input-dark:focus {
-    @apply border-gold-400/50;
-    box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.1);
-  }
-
-  /* Badges */
+  .card { @apply bg-gradient-card rounded-2xl border border-white/5 shadow-card p-6; animation: fadeIn 0.5s ease-out; }
+  .card-glow { @apply card relative overflow-hidden; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+  .card-glow::before { content: ''; @apply absolute inset-0 rounded-2xl opacity-0; background: radial-gradient(circle at 50% 0%, rgba(240, 185, 11, 0.12), transparent 70%); transition: opacity 0.4s ease; }
+  .card-glow:hover::before { @apply opacity-100; }
+  .card-glow:hover { @apply border-gold-400/20; transform: translateY(-2px); box-shadow: 0 8px 40px rgba(240, 185, 11, 0.08); }
+  .btn-primary { @apply bg-gradient-gold text-dark-950 font-bold px-6 py-3 rounded-xl transition-all duration-300 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed; position: relative; overflow: hidden; }
+  .btn-primary::before { content: ''; @apply absolute inset-0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent); transform: translateX(-100%); transition: transform 0.6s ease; }
+  .btn-primary:hover::before { transform: translateX(100%); }
+  .btn-primary:hover { box-shadow: 0 0 30px rgba(240, 185, 11, 0.4), 0 4px 20px rgba(240, 185, 11, 0.3); transform: translateY(-1px); }
+  .btn-secondary { @apply bg-dark-600 text-white font-medium px-6 py-3 rounded-xl border border-white/10 transition-all duration-300 active:scale-95; }
+  .btn-secondary:hover { @apply bg-dark-500 border-white/20; transform: translateY(-1px); }
+  .btn-danger { @apply bg-neon-red/10 text-neon-red font-medium px-6 py-3 rounded-xl border border-neon-red/30 transition-all duration-300 active:scale-95; }
+  .btn-danger:hover { @apply bg-neon-red/20; box-shadow: 0 0 20px rgba(255, 51, 102, 0.2); }
+  .btn-neon { @apply bg-neon-green/10 text-neon-green font-bold px-6 py-3 rounded-xl border border-neon-green/30 transition-all duration-300 active:scale-95; animation: pulseGlowGreen 3s ease-in-out infinite; }
+  .btn-neon:hover { @apply bg-neon-green/20; box-shadow: 0 0 30px rgba(0, 255, 136, 0.4); transform: translateY(-1px); }
+  .stake-btn { @apply relative bg-dark-700 border-2 border-white/10 rounded-xl px-6 py-4 text-center cursor-pointer transition-all duration-300; }
+  .stake-btn:hover { @apply border-gold-400/50 bg-dark-600; transform: translateY(-2px); box-shadow: 0 4px 20px rgba(240, 185, 11, 0.1); }
+  .stake-btn.active { @apply border-gold-400 bg-gold-400/10; animation: pulseGlow 2s ease-in-out infinite; }
+  .input-dark { @apply bg-dark-700 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-white/30 transition-all duration-300; }
+  .input-dark:focus { @apply border-gold-400/50; box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.1); }
   .badge { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium; }
   .badge-green { @apply badge bg-neon-green/10 text-neon-green border border-neon-green/30; }
   .badge-red { @apply badge bg-neon-red/10 text-neon-red border border-neon-red/30; }
   .badge-gold { @apply badge bg-gold-400/10 text-gold-400 border border-gold-400/30; }
   .badge-blue { @apply badge bg-neon-blue/10 text-neon-blue border border-neon-blue/30; }
-
   .pulse-dot { @apply w-2 h-2 rounded-full bg-neon-green animate-pulse; }
-
-  /* Chess board */
-  .react-chessboard {
-    border-radius: 12px !important;
-    overflow: hidden !important;
-    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6) !important;
-  }
-
-  /* Modals */
+  .react-chessboard { border-radius: 12px !important; overflow: hidden !important; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6) !important; }
   .modal-overlay { @apply fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center; animation: fadeIn 0.2s ease-out; }
   .modal-content { @apply bg-dark-800 border border-white/10 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl; animation: scaleIn 0.3s cubic-bezier(0.4,0,0.2,1); }
   .particle { position: absolute; width: var(--size,3px); height: var(--size,3px); background: var(--color,rgba(240,185,11,0.4)); border-radius: 50%; animation: particleDrift var(--duration,8s) var(--delay,0s) linear infinite; pointer-events: none; }
 }
 
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeInDown { from { opacity: 0; transform: translateY(-24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideInLeft { from { opacity: 0; transform: translateX(-40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+@keyframes pulseGlow { 0%, 100% { box-shadow: 0 0 5px rgba(240, 185, 11, 0.3); } 50% { box-shadow: 0 0 25px rgba(240, 185, 11, 0.6), 0 0 50px rgba(240, 185, 11, 0.2); } }
+@keyframes pulseGlowGreen { 0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 136, 0.3); } 50% { box-shadow: 0 0 25px rgba(0, 255, 136, 0.5), 0 0 50px rgba(0, 255, 136, 0.15); } }
+@keyframes float { 0%, 100% { transform: translateY(0px) rotate(0deg); } 33% { transform: translateY(-12px) rotate(2deg); } 66% { transform: translateY(-6px) rotate(-1deg); } }
+@keyframes floatSlow { 0%, 100% { transform: translateY(0px) rotate(0deg); } 50% { transform: translateY(-20px) rotate(3deg); } }
+@keyframes particleDrift { 0% { transform: translate(0, 0) scale(1); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translate(var(--dx, 50px), var(--dy, -100px)) scale(0.3); opacity: 0; } }
+@keyframes chessFloat1 { 0%, 100% { transform: translate(0, 0) rotate(0deg) scale(1); } 25% { transform: translate(15px, -20px) rotate(5deg) scale(1.05); } 50% { transform: translate(-10px, -35px) rotate(-3deg) scale(0.98); } 75% { transform: translate(20px, -15px) rotate(4deg) scale(1.02); } }
+@keyframes chessFloat2 { 0%, 100% { transform: translate(0, 0) rotate(0deg); } 33% { transform: translate(-20px, -25px) rotate(-6deg); } 66% { transform: translate(10px, -40px) rotate(4deg); } }
+@keyframes chessFloat3 { 0%, 100% { transform: translate(0, 0) rotate(0deg); } 50% { transform: translate(15px, -30px) rotate(8deg); } }
+@keyframes borderGlow { 0%, 100% { border-color: rgba(240, 185, 11, 0.1); } 50% { border-color: rgba(240, 185, 11, 0.4); } }
+@keyframes textGlow { 0%, 100% { text-shadow: 0 0 10px rgba(240, 185, 11, 0.3); } 50% { text-shadow: 0 0 20px rgba(240, 185, 11, 0.6), 0 0 40px rgba(240, 185, 11, 0.2); } }
 
 @layer utilities {
   .text-gradient { @apply bg-clip-text text-transparent; background-image: linear-gradient(135deg, #f0b90b 0%, #fde68a 25%, #f0b90b 50%, #fde68a 75%, #f0b90b 100%); background-size: 200% auto; animation: gradientShift 4s ease-in-out infinite; }
