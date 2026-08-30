@@ -1,55 +1,85 @@
 // ============================================================
-// CryptoChess - PostgreSQL Database Connection Pool
-// Uses pg module with connection pooling for production
+// CryptoChess - Database Connection (SQLite)
+// Zero-config, file-based database
 // ============================================================
 
-const { Pool } = require('pg');
+const Database = require('better-sqlite3');
+const path = require('path');
 
-// Create connection pool from environment variable
-// Compatible with Supabase, Render Postgres, or any PostgreSQL
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: false }
-    : false,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-});
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '..', '..', 'data', 'cryptochess.db');
 
-// Handle pool errors
-pool.on('error', (err) => {
-  console.error('[DB] Unexpected pool error:', err.message);
-});
+// Ensure data directory exists
+const fs = require('fs');
+const dataDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const db = new Database(DB_PATH);
+
+// Enable WAL mode for better concurrent performance
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 /**
- * Execute a single query with optional parameters
- * @param {string} text - SQL query string
- * @param {Array} params - Query parameters
- * @returns {Promise<QueryResult>}
+ * Execute a query (compatible wrapper for pg-style interface)
  */
-const query = async (text, params) => {
-  const start = Date.now();
-  try {
-    const result = await pool.query(text, params);
-    const duration = Date.now() - start;
-    if (duration > 500) {
-      console.warn(`[DB] Slow query (${duration}ms):`, text.substring(0, 80));
-    }
-    return result;
-  } catch (err) {
-    console.error('[DB] Query error:', err.message, '| Query:', text.substring(0, 100));
-    throw err;
+function query(sql, params = []) {
+  // Convert $1, $2... to ? placeholders for SQLite
+  let sqliteSQL = sql;
+  let idx = 0;
+  sqliteSQL = sql.replace(/\$\d+/g, () => {
+    idx++;
+    return params[idx - 1] !== undefined ? '?' : 'NULL';
+  });
+
+  // Check if it's a SELECT or RETURNING query
+  const trimmed = sqliteSQL.trim().toUpperCase();
+  if (trimmed.startsWith('SELECT') || trimmed.includes('RETURNING')) {
+    const rows = db.prepare(sqliteSQL).all(...params.slice(0, idx));
+    return { rows };
+  } else {
+    const result = db.prepare(sqliteSQL).run(...params.slice(0, idx));
+    return { rows: [], rowCount: result.changes };
   }
-};
+}
 
 /**
- * Get a client from pool for transactions (use with client.release())
- * @returns {Promise<PoolClient>}
+ * Get a client for transactions (wraps SQLite transaction)
  */
-const getClient = async () => {
-  const client = await pool.connect();
-  return client;
-};
+function getClient() {
+  return {
+    query: (sql, params = []) => {
+      // Convert $1, $2... to ? placeholders
+      let idx = 0;
+      const sqliteSQL = sql.replace(/\$\d+/g, () => {
+        idx++;
+        return params[idx - 1] !== undefined ? '?' : 'NULL';
+      });
 
-module.exports = { pool, query, getClient };
+      const trimmed = sqliteSQL.trim().toUpperCase();
+      if (trimmed.startsWith('SELECT') || trimmed.includes('RETURNING')) {
+        const rows = db.prepare(sqliteSQL).all(...params.slice(0, idx));
+        return { rows };
+      } else {
+        const result = db.prepare(sqliteSQL).run(...params.slice(0, idx));
+        return { rows: [], rowCount: result.changes };
+      }
+    },
+    beginTransaction: () => db.exec('BEGIN'),
+    commit: () => db.exec('COMMIT'),
+    rollback: () => db.exec('ROLLBACK'),
+    release: () => {}, // no-op for SQLite
+    // Support both BEGIN/COMMIT and begin()/commit() patterns
+    BEGIN: () => db.exec('BEGIN'),
+    COMMIT: () => db.exec('COMMIT'),
+    ROLLBACK: () => db.exec('ROLLBACK'),
+  };
+}
+
+// For transaction wrapping
+function beginTransaction() { db.exec('BEGIN'); }
+function commitTransaction() { db.exec('COMMIT'); }
+function rollbackTransaction() { db.exec('ROLLBACK'); }
+
+module.exports = { db, query, getClient, beginTransaction, commitTransaction, rollbackTransaction };

@@ -1,16 +1,10 @@
 // ============================================================
 // CryptoChess - Auth Middleware (Wallet-Based)
-// Verifies wallet address ownership via signed message
-// No JWT, no passwords — wallet address = identity
+// Wallet address = identity. No JWT, no passwords.
 // ============================================================
-
-const nacl = require('tweetnacl');
-const { naclDecode } = require('../utils/encoding');
 
 /**
  * Authenticate via wallet address from header
- * The wallet address is sent as x-wallet-address header
- * For socket auth, it's passed in handshake auth
  */
 function authenticateWallet(req, res, next) {
   const wallet = req.headers['x-wallet-address'];
@@ -19,7 +13,6 @@ function authenticateWallet(req, res, next) {
     return res.status(401).json({ error: 'Wallet address required' });
   }
 
-  // Basic Solana address validation (base58, 32-44 chars)
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) {
     return res.status(401).json({ error: 'Invalid wallet address format' });
   }
@@ -30,7 +23,6 @@ function authenticateWallet(req, res, next) {
 
 /**
  * Socket.io wallet auth middleware
- * Expects { walletAddress } in handshake auth
  */
 function authenticateSocket(socket, next) {
   const wallet = socket.handshake.auth.walletAddress;

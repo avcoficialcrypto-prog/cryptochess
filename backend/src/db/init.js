@@ -1,42 +1,42 @@
 // ============================================================
-// CryptoChess - Database Initialization Script
-// Run with: npm run db:init
+// CryptoChess - Database Initialization (SQLite)
 // ============================================================
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const fs = require('fs');
 const path = require('path');
-const { pool } = require('./connection');
+const Database = require('better-sqlite3');
 
-async function initDatabase() {
-  console.log('[DB INIT] Starting database initialization...');
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, '..', '..', 'data', 'cryptochess.db');
 
+// Ensure data directory
+const dataDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+// Read and execute schema
+const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+
+// Split by semicolons and execute each statement
+const statements = schema
+  .split(';')
+  .map(s => s.trim())
+  .filter(s => s.length > 0 && !s.startsWith('--'));
+
+for (const stmt of statements) {
   try {
-    // Read schema SQL file
-    const schemaPath = path.join(__dirname, 'schema.sql');
-    const schema = fs.readFileSync(schemaPath, 'utf-8');
-
-    // Execute schema
-    await pool.query(schema);
-    console.log('[DB INIT] Schema created successfully!');
-
-    // Verify tables exist
-    const tables = await pool.query(`
-      SELECT table_name FROM information_schema.tables
-      WHERE table_schema = 'public'
-      ORDER BY table_name
-    `);
-
-    console.log('[DB INIT] Tables created:');
-    tables.rows.forEach(row => console.log(`  - ${row.table_name}`));
-
-    console.log('[DB INIT] Database initialization complete!');
+    db.exec(stmt + ';');
   } catch (err) {
-    console.error('[DB INIT] Initialization failed:', err.message);
-    process.exit(1);
-  } finally {
-    await pool.end();
+    console.error(`Error executing: ${stmt.substring(0, 60)}...`);
+    console.error(err.message);
   }
 }
 
-initDatabase();
+console.log('✅ Database initialized successfully at:', DB_PATH);
+console.log('   Tables: players, games, transactions, commission_pool, sweep_orders, matchmaking_queue');
+
+db.close();

@@ -10,3 +10,7 @@ dist/
 build/
 .DS_Store
 Thumbs.db
+render-cli/
+render-cli.zip
+render.exe
+backend/data/

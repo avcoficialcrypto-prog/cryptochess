@@ -1,71 +1,65 @@
 -- ============================================================
--- CryptoChess - PostgreSQL Schema (Wallet-Only / No Accounts)
+-- CryptoChess - SQLite Schema (Wallet-Only)
 -- Identity = Solana wallet address
 -- ============================================================
 
--- Players identified by wallet address (no email, no password)
 CREATE TABLE IF NOT EXISTS players (
-  wallet_address VARCHAR(44) PRIMARY KEY,
-  balance_usdc DECIMAL(12,2) DEFAULT 100.00,
+  wallet_address TEXT PRIMARY KEY,
+  balance_usdc REAL DEFAULT 100.00,
   total_games_played INTEGER DEFAULT 0,
   total_games_won INTEGER DEFAULT 0,
-  total_earnings_usdc DECIMAL(12,2) DEFAULT 0.00,
-  total_wagered_usdc DECIMAL(12,2) DEFAULT 0.00,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  total_earnings_usdc REAL DEFAULT 0.00,
+  total_wagered_usdc REAL DEFAULT 0.00,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Games
 CREATE TABLE IF NOT EXISTS games (
-  id VARCHAR(36) PRIMARY KEY,
-  white_wallet VARCHAR(44) REFERENCES players(wallet_address),
-  black_wallet VARCHAR(44) REFERENCES players(wallet_address),
-  stake_amount DECIMAL(12,2) NOT NULL,
-  status VARCHAR(20) DEFAULT 'waiting',
-  winner_wallet VARCHAR(44),
-  invite_code VARCHAR(10) UNIQUE,
-  move_history JSONB DEFAULT '[]',
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  id TEXT PRIMARY KEY,
+  white_wallet TEXT REFERENCES players(wallet_address),
+  black_wallet TEXT REFERENCES players(wallet_address),
+  stake_amount REAL NOT NULL,
+  status TEXT DEFAULT 'waiting',
+  winner_wallet TEXT,
+  invite_code TEXT UNIQUE,
+  move_history TEXT DEFAULT '[]',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Transactions log
 CREATE TABLE IF NOT EXISTS transactions (
-  id SERIAL PRIMARY KEY,
-  wallet_address VARCHAR(44) REFERENCES players(wallet_address),
-  type VARCHAR(30) NOT NULL,
-  amount_usdc DECIMAL(12,2) NOT NULL,
-  game_id VARCHAR(36) REFERENCES games(id),
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_address TEXT REFERENCES players(wallet_address),
+  type TEXT NOT NULL,
+  amount_usdc REAL NOT NULL,
+  game_id TEXT,
   description TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Commission pool for auto-sweep
 CREATE TABLE IF NOT EXISTS commission_pool (
-  id SERIAL PRIMARY KEY,
-  amount_usdc DECIMAL(12,2) DEFAULT 0.00,
-  game_id VARCHAR(36),
-  collected_at TIMESTAMP DEFAULT NOW()
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  amount_usdc REAL DEFAULT 0.00,
+  game_id TEXT,
+  collected_at TEXT DEFAULT (datetime('now'))
 );
 
--- ChangeNOW sweep orders log
 CREATE TABLE IF NOT EXISTS sweep_orders (
-  id SERIAL PRIMARY KEY,
-  usdc_amount DECIMAL(12,2),
-  xmr_amount DECIMAL(12,8),
-  changenow_order_id VARCHAR(100),
-  status VARCHAR(20) DEFAULT 'pending',
-  created_at TIMESTAMP DEFAULT NOW(),
-  completed_at TIMESTAMP
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  usdc_amount REAL,
+  xmr_amount REAL,
+  changenow_order_id TEXT,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now')),
+  completed_at TEXT
 );
 
--- Matchmaking queue
 CREATE TABLE IF NOT EXISTS matchmaking_queue (
-  id SERIAL PRIMARY KEY,
-  wallet_address VARCHAR(44) REFERENCES players(wallet_address),
-  stake_amount DECIMAL(12,2) NOT NULL,
-  socket_id VARCHAR(50),
-  joined_at TIMESTAMP DEFAULT NOW()
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_address TEXT REFERENCES players(wallet_address),
+  stake_amount REAL NOT NULL,
+  socket_id TEXT,
+  joined_at TEXT DEFAULT (datetime('now'))
 );
 
 -- Indexes
