@@ -62,7 +62,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <head>
         {/* Google Search Console Verification */}
-        <meta name="google-site-verification" content="PASTE_YOUR_GSC_CODE_HERE" />
+        <meta name="google-site-verification" content="google60f4cd5cf186200c" />
       </head>
       <body className="min-h-screen bg-dark-950 text-white">
         <Providers>
