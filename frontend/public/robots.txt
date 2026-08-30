@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /play/
+Disallow: /_next/
+
+Sitemap: https://cryptochess.duckdns.org/sitemap.xml

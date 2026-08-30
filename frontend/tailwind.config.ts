@@ -18,6 +18,7 @@ const config: Config = {
           700: '#1a1a25',
           600: '#242433',
           500: '#2e2e42',
+          300: '#4a4a65',
           400: '#3a3a52',
         },
         // Accent colors
@@ -59,6 +60,7 @@ const config: Config = {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'glow': 'glow 2s ease-in-out infinite alternate',
         'float': 'float 3s ease-in-out infinite',
+        'spin-slow': 'spin 8s linear infinite',
       },
       keyframes: {
         glow: {
