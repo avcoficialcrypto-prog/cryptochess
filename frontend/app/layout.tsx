@@ -64,7 +64,7 @@ export default function RootLayout({
       <head>
         {/* Google Search Console Verification */}
         <meta name="google-site-verification" content="google60f4cd5cf186200c" />
-          <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+          <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
   </head>
       <body className="min-h-screen bg-dark-950 text-white">
         <Providers>

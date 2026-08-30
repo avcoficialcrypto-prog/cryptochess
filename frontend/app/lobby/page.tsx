@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { useI18n } from '@/lib/i18n';
@@ -16,7 +16,7 @@ import HypePhrases from '@/components/HypePhrases';
 import PaymentLockScreen from '@/components/PaymentLockScreen';
 import {
   Zap, Users, Copy, Check, Clock, ArrowLeft,
-  Swords, Link2, Loader2, AlertCircle,
+  Swords, Link2, Loader2, AlertCircle, ShieldCheck,
 } from 'lucide-react';
 
 const STAKE_OPTIONS = [1, 5, 10, 50, 100];
@@ -42,11 +42,13 @@ export default function LobbyPage() {
   const [challengeLoading, setChallengeLoading] = useState(false);
   const [challengeError, setChallengeError] = useState('');
 
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [turnstileVerified, setTurnstileVerified] = useState(false);
-  const [turnstileLoading, setTurnstileLoading] = useState(false);
-  const [turnstileError, setTurnstileError] = useState<string | null>(null);
-  const [showTurnstile, setShowTurnstile] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [captchaLoading, setCaptchaLoading] = useState(false);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const [captchaReady, setCaptchaReady] = useState(false);
+  const recaptchaRef = useRef<HTMLDivElement>(null);
+  const recaptchaWidgetId = useRef<number | null>(null);
   const [queueStatus, setQueueStatus] = useState<Record<number, number>>({});
 
   const [pendingGame, setPendingGame] = useState<{
@@ -66,41 +68,69 @@ export default function LobbyPage() {
 
   useEffect(() => () => { disconnectSocket(); }, []);
 
-  // ---- Turnstile Verification ----
-  const verifyTurnstile = async (token: string) => {
-    try {
-      setTurnstileLoading(true);
-      setTurnstileError(null);
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
-      const res = await fetch(backendUrl + "/api/turnstile/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setTurnstileVerified(true);
-        return true;
-      } else {
-        setTurnstileError("Verification failed. Please try again.");
-        return false;
+  // ---- reCAPTCHA v2 Verification ----
+  const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || '';
+
+  useEffect(() => {
+    // Wait for Google reCAPTCHA script to load, then render the widget
+    const checkReady = setInterval(() => {
+      if (typeof window !== 'undefined' && (window as any).grecaptcha && recaptchaRef.current && !captchaReady) {
+        clearInterval(checkReady);
+        try {
+          recaptchaWidgetId.current = (window as any).grecaptcha.render(recaptchaRef.current, {
+            sitekey: RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI', // fallback demo key
+            callback: (token: string) => {
+              setCaptchaToken(token);
+              setCaptchaLoading(true);
+              setCaptchaError(null);
+              // Verify with backend
+              const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+              fetch(backendUrl + '/api/turnstile/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token }),
+              })
+                .then(r => r.json())
+                .then(data => {
+                  if (data.success) {
+                    setCaptchaVerified(true);
+                  } else {
+                    setCaptchaError('Verification failed. Please try again.');
+                    setCaptchaVerified(false);
+                  }
+                })
+                .catch(() => {
+                  setCaptchaError('Verification error. Please try again.');
+                  setCaptchaVerified(false);
+                })
+                .finally(() => setCaptchaLoading(false));
+            },
+            'expired-callback': () => {
+              setCaptchaToken(null);
+              setCaptchaVerified(false);
+            },
+            'error-callback': () => {
+              setCaptchaError('Captcha error. Please reload.');
+              setCaptchaVerified(false);
+            },
+            theme: 'dark',
+            size: 'normal',
+          });
+          setCaptchaReady(true);
+        } catch (err) {
+          console.error('reCAPTCHA render error:', err);
+        }
       }
-    } catch (err) {
-      setTurnstileError("Verification error. Please try again.");
-      return false;
-    } finally {
-      setTurnstileLoading(false);
+    }, 200);
+    return () => clearInterval(checkReady);
+  }, [RECAPTCHA_SITE_KEY, captchaReady]);
+
+  const resetCaptcha = () => {
+    if (typeof window !== 'undefined' && (window as any).grecaptcha && recaptchaWidgetId.current !== null) {
+      (window as any).grecaptcha.reset(recaptchaWidgetId.current);
+      setCaptchaToken(null);
+      setCaptchaVerified(false);
     }
-  };
-
-  const handleTurnstileSuccess = (token: string) => {
-    setTurnstileToken(token);
-    verifyTurnstile(token);
-  };
-
-  const handleTurnstileExpire = () => {
-    setTurnstileToken(null);
-    setTurnstileVerified(false);
   };
 
   // ---- Quick Match ----
@@ -308,24 +338,36 @@ export default function LobbyPage() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />{challengeError}
                 </div>
               )}
-              {/* Turnstile Widget */}
-              {!turnstileVerified && (
+              {/* reCAPTCHA v2 Widget */}
+              {!captchaVerified && (
                 <div className="card mb-4 text-center">
-                  <div className="text-sm text-white/50 mb-3">Verify you are human</div>
+                  <div className="flex items-center justify-center gap-2 text-sm text-white/50 mb-3">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Verify you are human</span>
+                  </div>
                   <div className="flex justify-center mb-3">
-                    <div className="cf-turnstile" data-sitekey="0x4AAAAAAA_your_site_key" data-callback="onTurnstileSuccess" data-theme="dark" />
+                    <div ref={recaptchaRef} id="recaptcha-container" />
+                    {!captchaReady && (
+                      <div className="text-xs text-white/30">Loading verification...</div>
+                    )}
                   </div>
                   <div className="text-xs text-white/30">Complete the verification to start matchmaking</div>
-                  {turnstileError && <div className="mt-2 text-neon-red text-xs">{turnstileError}</div>}
-                  {turnstileLoading && <div className="mt-2 text-white/50 text-xs">Verifying...</div>}
+                  {captchaError && (
+                    <div className="mt-2 text-neon-red text-xs flex items-center justify-center gap-1">
+                      <AlertCircle className="w-3 h-3" />{captchaError}
+                    </div>
+                  )}
+                  {captchaLoading && <div className="mt-2 text-white/50 text-xs">Verifying...</div>}
                 </div>
               )}
-              {turnstileVerified && (
+              {captchaVerified && (
                 <div className="mb-3 text-center">
-                  <span className="badge-green text-xs">Human Verified</span>
+                  <span className="badge-green text-xs flex items-center justify-center gap-1">
+                    <ShieldCheck className="w-3 h-3" /> Human Verified ✓
+                  </span>
                 </div>
               )}
-              <button onClick={joinMatchmaking} disabled={player.balance_usdc < selectedStake || !turnstileVerified} className="btn-neon w-full text-center text-lg py-4">
+              <button onClick={joinMatchmaking} disabled={player.balance_usdc < selectedStake || !captchaVerified} className="btn-neon w-full text-center text-lg py-4">
                 <Swords className="w-5 h-5 inline mr-2" />{t.lobby.findMatch} — {selectedStake} {t.usdc}
               </button>
               <p className="text-xs text-white/20 text-center mt-3">{t.payment.toConfirm}</p>
