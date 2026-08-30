@@ -42,6 +42,11 @@ export default function LobbyPage() {
   const [challengeLoading, setChallengeLoading] = useState(false);
   const [challengeError, setChallengeError] = useState('');
 
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileVerified, setTurnstileVerified] = useState(false);
+  const [turnstileLoading, setTurnstileLoading] = useState(false);
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
+  const [showTurnstile, setShowTurnstile] = useState(false);
   const [queueStatus, setQueueStatus] = useState<Record<number, number>>({});
 
   // Payment lock screen
@@ -67,6 +72,42 @@ export default function LobbyPage() {
   useEffect(() => () => { disconnectSocket(); }, []);
 
   // ---- Quick Match ----
+    // ---- Turnstile Verification ----
+  const verifyTurnstile = async (token: string) => {
+    try {
+      setTurnstileLoading(true);
+      setTurnstileError(null);
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
+      const res = await fetch(backendUrl + "/api/turnstile/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTurnstileVerified(true);
+        return true;
+      } else {
+        setTurnstileError("Verification failed. Please try again.");
+        return false;
+      }
+    } catch (err) {
+      setTurnstileError("Verification error. Please try again.");
+      return false;
+    } finally {
+      setTurnstileLoading(false);
+    }
+  };
+
+  const handleTurnstileSuccess = (token: string) => {
+    setTurnstileToken(token);
+    verifyTurnstile(token);
+  };
+
+  const handleTurnstileExpire = () => {
+    setTurnstileToken(null);
+    setTurnstileVerified(false);
+  };
   const joinMatchmaking = useCallback(async () => {
     if (!walletAddress) return;
     setWaiting(true);
@@ -263,7 +304,24 @@ export default function LobbyPage() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />{challengeError}
                 </div>
               )}
-              <button onClick={joinMatchmaking} disabled={player.balance_usdc < selectedStake} className="btn-neon w-full text-center text-lg">
+                            {/* Turnstile Widget - shown before matching */}
+              {!turnstileVerified && (
+                <div className="card mb-4 text-center">
+                  <div className="text-sm text-white/50 mb-3">Verify you are human</div>
+                  <div className="flex justify-center mb-3">
+                    <div className="cf-turnstile" data-sitekey="0x4AAAAAAA_your_site_key" data-callback="onTurnstileSuccess" data-theme="dark" />
+                  </div>
+                  <div className="text-xs text-white/30">Complete the verification to start matchmaking</div>
+                  {turnstileError && <div className="mt-2 text-neon-red text-xs">{turnstileError}</div>}
+                  {turnstileLoading && <div className="mt-2 text-white/50 text-xs">Verifying...</div>}
+                </div>
+              )}
+              {turnstileVerified && (
+                <div className="mb-3 text-center">
+                  <span className="badge-green text-xs">Human Verified</span>
+                </div>
+              )}
+              <button onClick={joinMatchmaking} disabled={player.balance_usdc < selectedStake || !turnstileVerified} className="btn-neon w-full text-center text-lg">
                 <Swords className="w-5 h-5 inline mr-2" />{t.lobby.findMatch} — {selectedStake} {t.usdc}
               </button>
               <p className="text-xs text-white/20 text-center mt-3">{t.payment.toConfirm}</p>
