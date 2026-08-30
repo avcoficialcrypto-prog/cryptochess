@@ -1,7 +1,7 @@
 // ============================================================
-// CryptoChess - Authentication Context (Wallet-Only)
-// Phantom wallet connection = identity
-// Mobile deep links + Desktop extension detection
+// CryptoChess - Authentication Context (No Wallet Required)
+// Auto-generates temp Solana wallets for each session
+// Phantom wallet is optional — manual deposits via Solana Pay
 // ============================================================
 
 'use client';
@@ -32,35 +32,17 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Detect if running on mobile
-function isMobile(): boolean {
-  if (typeof window === 'undefined') return false;
-  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent
-  );
-}
-
-// Detect if inside Phantom in-app browser
-function isInPhantomBrowser(): boolean {
-  if (typeof window === 'undefined') return false;
-  return !!(window as any).phantom?.solana?.isPhantom || 
-         !!(window as any).solana?.isPhantom;
-}
-
-// Get the Phantom provider (works on both desktop and mobile)
-function getPhantomProvider(): any {
-  if (typeof window === 'undefined') return null;
-  // Desktop extension
-  if ((window as any).solana?.isPhantom) return (window as any).solana;
-  // Mobile in-app browser
-  if ((window as any).phantom?.solana?.isPhantom) return (window as any).phantom.solana;
-  return null;
-}
-
-// Open Phantom deep link for mobile
-function openPhantomDeepLink() {
-  const currentUrl = encodeURIComponent(window.location.href);
-  window.location.href = `https://phantom.app/ul/browse/${currentUrl}`;
+/**
+ * Generate a random base58-like wallet address for temp sessions
+ * This is NOT a real Solana keypair — just a unique identifier
+ */
+function generateTempWalletId(): string {
+  const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let result = '';
+  for (let i = 0; i < 44; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -69,84 +51,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
 
-  // Check for saved wallet connection on mount
+  // Auto-generate or restore wallet on mount
   useEffect(() => {
     const savedWallet = localStorage.getItem('cryptochess_wallet');
     if (savedWallet) {
-      checkPhantomConnection(savedWallet);
+      initPlayer(savedWallet);
     } else {
-      setLoading(false);
+      // Auto-generate a temp wallet address
+      const tempWallet = generateTempWalletId();
+      localStorage.setItem('cryptochess_wallet', tempWallet);
+      initPlayer(tempWallet);
     }
   }, []);
 
-  const checkPhantomConnection = async (savedWallet: string) => {
+  const initPlayer = async (wallet: string) => {
     try {
-      const phantom = getPhantomProvider();
-      if (phantom?.publicKey) {
-        const currentWallet = phantom.publicKey.toString();
-        if (currentWallet === savedWallet) {
-          setWalletAddress(currentWallet);
-          await fetchPlayer(currentWallet);
-          return;
-        }
-      }
-      // Phantom not connected or different wallet
-      localStorage.removeItem('cryptochess_wallet');
-      setLoading(false);
-    } catch {
-      setLoading(false);
-    }
-  };
-
-  const fetchPlayer = async (wallet: string) => {
-    try {
+      setWalletAddress(wallet);
       const data = await api.connectWallet(wallet);
       setPlayer(data.player);
     } catch (err) {
-      console.error('Failed to fetch player:', err);
+      console.error('Failed to init player:', err);
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * Connect Phantom wallet (optional — replaces temp wallet)
+   */
   const connectWallet = useCallback(async () => {
     setConnecting(true);
     try {
-      const phantom = getPhantomProvider();
+      const phantom = (window as any).solana;
+      const phantomMobile = (window as any).phantom?.solana;
 
-      if (!phantom) {
-        // Not detected — either not installed or wrong browser
-        if (isMobile()) {
-          // On mobile: redirect to Phantom app via deep link
-          openPhantomDeepLink();
-          throw new Error('OPENING_PHANTOM_APP');
-        } else {
-          // On desktop: open Phantom install page in new tab
-          window.open('https://phantom.app/', '_blank', 'noopener');
-          throw new Error('Please install the Phantom wallet extension and reload this page.');
-        }
+      const provider = phantom?.isPhantom ? phantom : phantomMobile?.isPhantom ? phantomMobile : null;
+
+      if (!provider) {
+        // Phantom not installed — open install page
+        window.open('https://phantom.app/', '_blank', 'noopener');
+        throw new Error('Please install Phantom wallet extension and reload.');
       }
 
-      // Phantom is available — request connection
-      // If not yet connected (no publicKey), connect first
-      if (!phantom.publicKey) {
+      // Connect if not already connected
+      if (!provider.publicKey) {
         try {
-          await phantom.connect();
-        } catch (connectErr: any) {
-          // User rejected the connection request
-          if (connectErr.code === 4001 || connectErr.message?.includes('rejected')) {
-            throw new Error('Connection rejected. Please approve in Phantom.');
-          }
-          throw connectErr;
+          await provider.connect();
+        } catch (err: any) {
+          if (err.code === 4001) throw new Error('Connection rejected. Please approve in Phantom.');
+          throw err;
         }
       }
 
-      const wallet = phantom.publicKey.toString();
-      setWalletAddress(wallet);
+      const wallet = provider.publicKey.toString();
       localStorage.setItem('cryptochess_wallet', wallet);
-      await fetchPlayer(wallet);
+      setWalletAddress(wallet);
+
+      const data = await api.connectWallet(wallet);
+      setPlayer(data.player);
     } catch (err: any) {
-      // Re-throw with proper message
       throw err;
     } finally {
       setConnecting(false);
@@ -154,13 +117,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const disconnectWallet = useCallback(() => {
-    const phantom = getPhantomProvider();
-    if (phantom?.disconnect) {
-      phantom.disconnect();
-    }
     localStorage.removeItem('cryptochess_wallet');
     setWalletAddress(null);
     setPlayer(null);
+
+    // Auto-generate new temp wallet
+    const tempWallet = generateTempWalletId();
+    localStorage.setItem('cryptochess_wallet', tempWallet);
+    setWalletAddress(tempWallet);
+    initPlayer(tempWallet);
   }, []);
 
   const refreshPlayer = useCallback(async () => {

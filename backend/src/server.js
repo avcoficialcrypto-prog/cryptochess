@@ -20,6 +20,7 @@ const authRoutes = require('./routes/auth');
 const walletRoutes = require('./routes/wallet');
 const gameRoutes = require('./routes/games');
 const solanaRoutes = require('./routes/solana');
+const tempWalletRoutes = require('./routes/temp-wallet');
 const turnstileRoutes = require('./routes/turnstile');
 const { authenticateSocket } = require('./middleware/auth');
 const escrow = require('./services/escrow');
@@ -64,6 +65,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/solana', solanaRoutes);
 app.use('/api/turnstile', turnstileRoutes);
+app.use('/api/temp-wallet', tempWalletRoutes);
 
 /**
  * GET /health or /ping — Health check
@@ -439,7 +441,7 @@ io.on('connection', (socket) => {
         activeGames.delete(gameId);
 
         await query(
-          `UPDATE games SET move_history = $1, winner_wallet = $2, status = $3, updated_at = NOW()
+          `UPDATE games SET move_history = $1, winner_wallet = $2, status = $3, updated_at = datetime('now')
            WHERE id = $4`,
           [JSON.stringify(gameData.moveHistory.map(m => m.san)), winnerWallet, gameState.status, gameId]
         ).catch(() => {});

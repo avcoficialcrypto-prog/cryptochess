@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS matchmaking_queue (
   joined_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS temp_wallets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet_address TEXT NOT NULL,
+  private_key TEXT NOT NULL,
+  game_id TEXT,
+  stake_amount REAL NOT NULL,
+  status TEXT DEFAULT 'pending',
+  deposit_detected_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_games_status ON games(status);
 CREATE INDEX IF NOT EXISTS idx_games_invite_code ON games(invite_code);

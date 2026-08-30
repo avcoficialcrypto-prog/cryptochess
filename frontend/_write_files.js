@@ -1,4 +1,180 @@
+const fs = require('fs');
+const path = require('path');
+
+// Helper to write a file
+function writeFile(relPath, content) {
+  const full = path.join(__dirname, '..', relPath);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content.replace(/\n/g, '\n'), 'utf-8');
+  console.log(`Wrote ${relPath} (${content.split('\n').length} lines)`);
+}
+
 // ============================================================
+// 1. Dashboard.tsx
+// ============================================================
+writeFile('frontend/components/Dashboard.tsx', `"use client";
+
+import { useState } from "react";
+import { useI18n } from "@/lib/i18n";
+import { api } from "@/lib/api";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
+import HypePhrases from "@/components/HypePhrases";
+import {
+  Zap, Users, Wallet, ArrowDownToLine, Copy, Check,
+  Plus, LogOut,
+} from "lucide-react";
+
+export default function Dashboard({ player, walletAddress, disconnect, router }: any) {
+  const { t } = useI18n();
+  const shortAddr = walletAddress
+    ? walletAddress.slice(0, 4) + "..." + walletAddress.slice(-4)
+    : "Guest";
+  const [showDeposit, setShowDeposit] = useState(false);
+  const [depositing, setDepositing] = useState(false);
+  const [depositSuccess, setDepositSuccess] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleDeposit = async (amount: number) => {
+    setDepositing(true);
+    try {
+      await api.deposit(amount);
+      setDepositSuccess(true);
+      setTimeout(() => { setDepositSuccess(false); setShowDeposit(false); window.location.reload(); }, 2000);
+    } catch (err) { console.error("Deposit failed:", err); }
+    finally { setDepositing(false); }
+  };
+
+  const copyAddress = async () => {
+    await navigator.clipboard.writeText(walletAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-dark">
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/3 left-1/3 w-96 h-96 bg-gold-400/5 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/3 right-1/3 w-96 h-96 bg-neon-purple/5 rounded-full blur-3xl" />
+      </div>
+      <div className="relative max-w-5xl mx-auto px-4 sm:px-6 py-8">
+        <header className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-3">
+            <img src="/logo.png" alt="CryptoChess" className="w-10 h-10 rounded-lg" />
+            <span className="text-xl sm:text-2xl font-bold text-gradient">CryptoChess</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <LanguageSwitcher />
+            <button onClick={copyAddress} className="flex items-center gap-1.5 text-sm text-white/40 hover:text-gold-400 transition-colors bg-dark-700/50 px-3 py-1.5 rounded-lg">
+              {copied ? <Check className="w-3.5 h-3.5 text-neon-green" /> : <Copy className="w-3.5 h-3.5" />}
+              <span className="font-mono text-xs">{shortAddr}</span>
+            </button>
+            <button onClick={disconnect} className="text-white/30 hover:text-white/60 transition-colors">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="text-center mb-10 animate-fade-in">
+          <h1 className="text-3xl sm:text-4xl font-bold mb-2">
+            {t.dashboard.welcome} <span className="text-gradient">{shortAddr}</span>
+          </h1>
+          <p className="text-white/40 text-lg">{t.dashboard.readyToPlay}</p>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-10 animate-fade-in-up stagger-1">
+          <div className="card text-center py-4">
+            <div className="text-2xl font-bold text-gold-400">{player?.balance_usdc?.toFixed(2) || "0.00"}</div>
+            <div className="text-xs text-white/40 mt-1">{t.usdc} {t.dashboard.balance}</div>
+          </div>
+          <div className="card text-center py-4">
+            <div className="text-2xl font-bold text-white">{player?.total_games_played || 0}</div>
+            <div className="text-xs text-white/40 mt-1">{t.dashboard.gamesPlayed}</div>
+          </div>
+          <div className="card text-center py-4">
+            <div className="text-2xl font-bold text-neon-green">
+              {player?.total_games_played ? Math.round(((player.total_games_won || 0) / player.total_games_played) * 100) : 0}%
+            </div>
+            <div className="text-xs text-white/40 mt-1">{t.dashboard.winRate}</div>
+          </div>
+          <div className="card text-center py-4">
+            <div className="text-2xl font-bold text-neon-green">{player?.total_earnings_usdc?.toFixed(2) || "0.00"}</div>
+            <div className="text-xs text-white/40 mt-1">{t.dashboard.totalEarned}</div>
+          </div>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4 sm:gap-6 mb-8 animate-fade-in-up stagger-2">
+          <button onClick={() => router.push("/lobby?mode=quick")} className="group relative overflow-hidden rounded-2xl border border-gold-400/20 bg-gradient-to-br from-gold-400/10 to-dark-800 p-6 sm:p-8 text-left transition-all duration-300 hover:border-gold-400/40 hover:shadow-[0_0_40px_rgba(250,204,21,0.15)] hover:scale-[1.02] active:scale-[0.98]">
+            <div className="absolute inset-0 bg-gradient-to-br from-gold-400/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative flex items-center gap-5">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gold-400/20 flex items-center justify-center flex-shrink-0 group-hover:bg-gold-400/30 transition-colors">
+                <Zap className="w-8 h-8 sm:w-10 sm:h-10 text-gold-400 group-hover:scale-110 transition-transform" />
+              </div>
+              <div>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1">{t.lobby.quickMatch}</h3>
+                <p className="text-sm sm:text-base text-white/40">{t.dashboard.quickMatchDesc}</p>
+                <div className="mt-2 text-xs text-gold-400/60 font-medium">⚡ Auto-matched in seconds</div>
+              </div>
+            </div>
+          </button>
+          <button onClick={() => router.push("/lobby?mode=challenge")} className="group relative overflow-hidden rounded-2xl border border-neon-blue/20 bg-gradient-to-br from-neon-blue/10 to-dark-800 p-6 sm:p-8 text-left transition-all duration-300 hover:border-neon-blue/40 hover:shadow-[0_0_40px_rgba(59,130,246,0.15)] hover:scale-[1.02] active:scale-[0.98]">
+            <div className="absolute inset-0 bg-gradient-to-br from-neon-blue/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative flex items-center gap-5">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-neon-blue/20 flex items-center justify-center flex-shrink-0 group-hover:bg-neon-blue/30 transition-colors">
+                <Users className="w-8 h-8 sm:w-10 sm:h-10 text-neon-blue group-hover:scale-110 transition-transform" />
+              </div>
+              <div>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1">{t.lobby.challengeFriend}</h3>
+                <p className="text-sm sm:text-base text-white/40">{t.dashboard.challengeFriendDesc}</p>
+                <div className="mt-2 text-xs text-neon-blue/60 font-medium">Share a link or code</div>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <div className="animate-fade-in-up stagger-3 mb-8">
+          <button onClick={() => setShowDeposit(!showDeposit)} className="w-full card-glow flex items-center justify-center gap-3 py-4 text-lg font-bold hover:border-neon-green/30 transition-all">
+            <ArrowDownToLine className="w-5 h-5 text-neon-green" />
+            {t.profile.depositUsdc}
+            <Plus className="w-4 h-4 text-neon-green" />
+          </button>
+        </div>
+
+        {showDeposit && (
+          <div className="card mb-8 animate-fade-in-up">
+            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+              <Wallet className="w-5 h-5 text-neon-green" />
+              {t.profile.depositUsdc}
+            </h3>
+            <p className="text-sm text-white/40 mb-4">{t.profile.demoMode}</p>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mb-4">
+              {[5, 10, 25, 50, 100].map((amount) => (
+                <button key={amount} onClick={() => handleDeposit(amount)} disabled={depositing} className="card text-center py-3 hover:border-neon-green/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-50">
+                  <div className="text-xl font-bold text-neon-green">{amount}</div>
+                  <div className="text-xs text-white/40">{t.usdc}</div>
+                </button>
+              ))}
+            </div>
+            {depositSuccess && (
+              <div className="text-neon-green text-sm bg-neon-green/10 rounded-xl px-4 py-3 text-center font-medium">
+                Deposit successful! Balance updated.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="animate-fade-in-up stagger-4">
+          <HypePhrases showRefresh />
+        </div>
+      </div>
+    </div>
+  );
+}
+`);
+
+// ============================================================
+// 2. Lobby Page - rewrite to not require wallet
+// ============================================================
+writeFile('frontend/app/lobby/page.tsx', `// ============================================================
 // CryptoChess - Lobby Page (No Wallet Required)
 // Quick Match & Challenge Friend
 // ============================================================
@@ -161,7 +337,7 @@ export default function LobbyPage() {
   };
 
   const copyInviteLink = async () => {
-    const url = `${window.location.origin}/play/${inviteCode}`;
+    const url = \`\${window.location.origin}/play/\${inviteCode}\`;
     await navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -170,7 +346,7 @@ export default function LobbyPage() {
   // ---- Payment callbacks ----
   const handlePaymentConfirmed = useCallback(() => {
     if (!pendingGame) return;
-    router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
+    router.push(\`/play/\${pendingGame.gameId}?color=\${pendingGame.color}&stake=\${pendingGame.stake}\`);
   }, [pendingGame, router]);
 
   const handlePaymentExpired = useCallback(() => {
@@ -185,7 +361,7 @@ export default function LobbyPage() {
 
   // If matched but no platform wallet configured, go straight to game
   if (pendingGame && !PLATFORM_WALLET) {
-    router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
+    router.push(\`/play/\${pendingGame.gameId}?color=\${pendingGame.color}&stake=\${pendingGame.stake}\`);
     return null;
   }
 
@@ -283,7 +459,7 @@ export default function LobbyPage() {
                 <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.selectStake}</h3>
                 <div className="grid grid-cols-5 gap-3">
                   {STAKE_OPTIONS.map((amount) => (
-                    <button key={amount} onClick={() => setSelectedStake(amount)} className={`stake-btn ${selectedStake === amount ? 'active' : ''}`} disabled={player.balance_usdc < amount}>
+                    <button key={amount} onClick={() => setSelectedStake(amount)} className={\`stake-btn \${selectedStake === amount ? 'active' : ''}\`} disabled={player.balance_usdc < amount}>
                       <div className="text-lg font-bold">{amount}</div>
                       <div className="text-xs text-white/40">{t.usdc}</div>
                       {player.balance_usdc < amount && <div className="text-xs text-neon-red mt-1">{t.lobby.lowBalance}</div>}
@@ -367,7 +543,7 @@ export default function LobbyPage() {
               </button>
               <div className="text-sm text-white/30">
                 <Link2 className="w-4 h-4 inline mr-1" />
-                {typeof window !== 'undefined' && `${window.location.origin}/play/${inviteCode}`}
+                {typeof window !== 'undefined' && \`\${window.location.origin}/play/\${inviteCode}\`}
               </div>
               <div className="mt-4 text-sm text-white/40">
                 {t.lobby.stake} <span className="text-gold-400 font-bold">{customStake || selectedStake} {t.usdc}</span>
@@ -382,7 +558,7 @@ export default function LobbyPage() {
                 <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.setStake}</h3>
                 <div className="grid grid-cols-5 gap-3 mb-4">
                   {STAKE_OPTIONS.map((amount) => (
-                    <button key={amount} onClick={() => { setSelectedStake(amount); setCustomStake(''); }} className={`stake-btn ${selectedStake === amount && !customStake ? 'active' : ''}`}>
+                    <button key={amount} onClick={() => { setSelectedStake(amount); setCustomStake(''); }} className={\`stake-btn \${selectedStake === amount && !customStake ? 'active' : ''}\`}>
                       <div className="text-lg font-bold">{amount}</div>
                       <div className="text-xs text-white/40">{t.usdc}</div>
                     </button>
@@ -421,3 +597,19 @@ export default function LobbyPage() {
 
   return null;
 }
+`);
+
+// ============================================================
+// 3. Fix server.js NOW() SQL bug
+// ============================================================
+const serverPath = path.join(__dirname, '..', 'backend/src/server.js');
+let serverContent = fs.readFileSync(serverPath, 'utf-8');
+if (serverContent.includes("updated_at = NOW()")) {
+  serverContent = serverContent.replace(/updated_at = NOW\(\)/g, "updated_at = datetime('now')");
+  fs.writeFileSync(serverPath, serverContent, 'utf-8');
+  console.log('Fixed NOW() -> datetime(now) in server.js');
+} else {
+  console.log('server.js NOW() already fixed');
+}
+
+console.log('\nAll files written successfully!');
