@@ -78,7 +78,7 @@ export default function LobbyPage() {
         clearInterval(checkReady);
         try {
           recaptchaWidgetId.current = (window as any).grecaptcha.render(recaptchaRef.current, {
-            sitekey: RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI', // fallback demo key
+            sitekey: RECAPTCHA_SITE_KEY || '6Let3aAtAAAAAFZPNhSUYSBsdXAKuD9LSbcgvSUa',
             callback: (token: string) => {
               setCaptchaToken(token);
               setCaptchaLoading(true);
