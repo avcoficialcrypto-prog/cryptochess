@@ -313,10 +313,10 @@ export default function LobbyPage() {
                 <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.selectStake}</h3>
                 <div className="grid grid-cols-5 gap-3">
                   {STAKE_OPTIONS.map((amount) => (
-                    <button key={amount} onClick={() => setSelectedStake(amount)} className={`stake-btn ${selectedStake === amount ? 'active' : ''}`} disabled={player.balance_usdc < amount}>
+                    <button key={amount} onClick={() => setSelectedStake(amount)} className={`stake-btn ${selectedStake === amount ? 'active' : ''} ${player.balance_usdc >= amount ? 'border-gold-400/20' : 'border-white/5'}`}>
                       <div className="text-lg font-bold">{amount}</div>
                       <div className="text-xs text-white/40">{t.usdc}</div>
-                      {player.balance_usdc < amount && <div className="text-xs text-neon-red mt-1">{t.lobby.lowBalance}</div>}
+                      {player.balance_usdc < amount && <div className="text-xs text-white/20 mt-1">↓</div>}
                     </button>
                   ))}
                 </div>
@@ -367,9 +367,21 @@ export default function LobbyPage() {
                   </span>
                 </div>
               )}
-              <button onClick={joinMatchmaking} disabled={player.balance_usdc < selectedStake || !captchaVerified} className="btn-neon w-full text-center text-lg py-4">
-                <Swords className="w-5 h-5 inline mr-2" />{t.lobby.findMatch} — {selectedStake} {t.usdc}
-              </button>
+              {player.balance_usdc < selectedStake ? (
+                <div className="space-y-3">
+                  <div className="bg-gold-400/5 border border-gold-400/10 rounded-xl p-4 text-center">
+                    <p className="text-sm text-white/50 mb-1">{t.lobby.lowBalance}</p>
+                    <p className="text-xs text-white/30">{t.lobby.depositToPlay}</p>
+                  </div>
+                  <button onClick={() => router.push('/')} className="btn-primary w-full text-center text-lg py-4">
+                    💰 {t.lobby.deposit} {selectedStake - Math.floor(player.balance_usdc)} {t.usdc}
+                  </button>
+                </div>
+              ) : (
+                <button onClick={joinMatchmaking} disabled={!captchaVerified} className="btn-neon w-full text-center text-lg py-4">
+                  <Swords className="w-5 h-5 inline mr-2" />{t.lobby.findMatch} — {selectedStake} {t.usdc}
+                </button>
+              )}
               <p className="text-xs text-white/20 text-center mt-3">{t.payment.toConfirm}</p>
             </>
           )}
