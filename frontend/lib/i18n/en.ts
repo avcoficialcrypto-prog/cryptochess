@@ -68,6 +68,11 @@ const en = {
     enterCode: 'Enter code (e.g. ABC123)',
     join: 'Join',
     stake: 'Stake:',
+    opponentLeft: 'Opponent did not pay',
+    rematching: 'Matching you with a new rival...',
+    noMatchFound: 'No match found. Your stake is safe.',
+    refundAvailable: 'You can now request a refund of your stake.',
+    refund: 'Refund',
   },
 
   // ---- Payment Lock Screen ----

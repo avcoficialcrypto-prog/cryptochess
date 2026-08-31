@@ -19,6 +19,42 @@ async function getBalance(walletAddress) {
 /**
  * Lock wager for matchmaking (deducts from BOTH players)
  */
+async function lockSingleWager(walletAddress, stakeAmount, gameId) {
+  try {
+    query('BEGIN');
+
+    const result = query(
+      `UPDATE players SET balance_usdc = balance_usdc - $1, updated_at = datetime('now')
+       WHERE wallet_address = $2 AND balance_usdc >= $1`,
+      [stakeAmount, walletAddress]
+    );
+    if (result.rowCount === 0) {
+      query('ROLLBACK');
+      return { success: false, error: 'Insufficient balance' };
+    }
+
+    // Log transaction
+    query(
+      `INSERT INTO transactions (wallet_address, type, amount_usdc, game_id, description)
+       VALUES ($1, 'wager_lock', $2, $3, 'Locked wager (payment phase)')`,
+      [walletAddress, -stakeAmount, gameId]
+    );
+
+    // Update wager stats
+    query(`UPDATE players SET total_wagered_usdc = total_wagered_usdc + $1 WHERE wallet_address = $2`, [stakeAmount, walletAddress]);
+
+    query('COMMIT');
+    saveDB();
+
+    console.log(`[ESCROW] Single wager locked: ${stakeAmount} USDC | ${walletAddress.slice(0, 8)} | Game: ${gameId}`);
+    return { success: true };
+  } catch (err) {
+    try { query('ROLLBACK'); } catch {}
+    console.error('[ESCROW] lockSingleWager failed:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
 async function lockWager(whiteWallet, blackWallet, stakeAmount, gameId) {
   try {
     query('BEGIN');
@@ -256,4 +292,4 @@ async function settleDraw(gameId) {
   }
 }
 
-module.exports = { getBalance, lockWager, lockChallengeJoiner, settleGame, settleDraw, COMMISSION_RATE };
+module.exports = { getBalance, lockSingleWager, lockWager, lockChallengeJoiner, settleGame, settleDraw, COMMISSION_RATE };

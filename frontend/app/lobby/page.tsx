@@ -57,6 +57,19 @@ export default function LobbyPage() {
     stake: number;
   } | null>(null);
 
+  // Payment phase state
+  const [paymentPhase, setPaymentPhase] = useState<{
+    gameId: string;
+    color: string;
+    stake: number;
+    opponent: string;
+    timeLeft: number;
+  } | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'paying' | 'paid' | 'waiting_rival' | 'rival_left' | 'rematching' | 'refund_available' | 'error'>('idle');
+  const [paymentError, setPaymentError] = useState('');
+  const [refundEligibleAt, setRefundEligibleAt] = useState<number | null>(null);
+  const [refundCountdown, setRefundCountdown] = useState(0);
+
   useEffect(() => {
     const fetchStatus = async () => {
       try { const s = await api.getMatchmakingStatus(); setQueueStatus(s); } catch {}
@@ -67,6 +80,39 @@ export default function LobbyPage() {
   }, []);
 
   useEffect(() => () => { disconnectSocket(); }, []);
+
+  // Payment countdown timer
+  useEffect(() => {
+    if (!paymentPhase || paymentStatus === 'paid' || paymentStatus === 'idle') return;
+    const timer = setInterval(() => {
+      setPaymentPhase(prev => {
+        if (!prev || prev.timeLeft <= 1) {
+          clearInterval(timer);
+          return prev;
+        }
+        return { ...prev, timeLeft: prev.timeLeft - 1 };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [paymentPhase?.gameId, paymentStatus]);
+
+  // Refund countdown timer
+  useEffect(() => {
+    if (!refundEligibleAt || paymentStatus !== 'refund_available') return;
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((refundEligibleAt - Date.now()) / 1000));
+      setRefundCountdown(remaining);
+      if (remaining <= 0) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [refundEligibleAt, paymentStatus]);
+
+  // Auto-navigate when game starts (both paid)
+  useEffect(() => {
+    if (paymentStatus === 'paid' && paymentPhase) {
+      router.push(`/play/${paymentPhase.gameId}?color=${paymentPhase.color}&stake=${paymentPhase.stake}`);
+    }
+  }, [paymentStatus, paymentPhase, router]);
 
   // ---- reCAPTCHA v2 Verification ----
   const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || '';
@@ -138,13 +184,91 @@ export default function LobbyPage() {
     if (!walletAddress) return;
     setWaiting(true);
     setWaitingStake(selectedStake);
+    setPaymentPhase(null);
+    setPaymentStatus('idle');
 
     try {
       const socket = getSocket(walletAddress);
 
-      socket.on('game:matched', (data) => {
-        setPendingGame({ gameId: data.gameId, color: data.color, stake: data.stake });
+      // Remove old listeners
+      socket.off('payment:required');
+      socket.off('payment:status');
+      socket.off('payment:waiting');
+      socket.off('payment:opponent_left');
+      socket.off('payment:waiting_refund');
+      socket.off('payment:refunded');
+      socket.off('payment:error');
+      socket.off('matchmaking:waiting');
+      socket.off('matchmaking:error');
+
+      // Payment required after match
+      socket.on('payment:required', (data) => {
+        setWaiting(false);
+        setPaymentPhase({
+          gameId: data.gameId,
+          color: data.color,
+          stake: data.stake,
+          opponent: data.opponent?.wallet || '',
+          timeLeft: Math.floor(data.timeLimitMs / 1000),
+        });
+        setPaymentStatus('idle');
       });
+
+      // Other player confirmed payment
+      socket.on('payment:status', (data) => {
+        if (data.bothPaid) {
+          // Both paid — game starts, navigate to game page
+          if (paymentPhase) {
+            router.push(`/play/${paymentPhase.gameId}?color=${paymentPhase.color}&stake=${paymentPhase.stake}`);
+          }
+        } else {
+          setPaymentStatus('waiting_rival');
+        }
+      });
+
+      // Waiting for rival confirmation
+      socket.on('payment:waiting', () => {
+        setPaymentStatus('waiting_rival');
+      });
+
+      // Opponent left without paying
+      socket.on('payment:opponent_left', (data) => {
+        setPaymentStatus('rematching');
+        // Update payment phase with new game if re-matched
+        if (data.gameId) {
+          setPaymentPhase({
+            gameId: data.gameId,
+            color: 'white',
+            stake: data.stakeAmount,
+            opponent: '',
+            timeLeft: 60,
+          });
+        }
+      });
+
+      // Made eligible for refund after rematch timeout
+      socket.on('payment:waiting_refund', (data) => {
+        setPaymentStatus('refund_available');
+        setRefundEligibleAt(data.refundEligibleAt);
+        if (data.gameId) {
+          setPaymentPhase(prev => prev ? { ...prev, gameId: data.gameId } : null);
+        }
+      });
+
+      // Refund confirmed
+      socket.on('payment:refunded', (data) => {
+        setPaymentStatus('idle');
+        setPaymentPhase(null);
+        setRefundEligibleAt(null);
+        refreshBalance();
+      });
+
+      // Payment error
+      socket.on('payment:error', (data) => {
+        setPaymentStatus('error');
+        setPaymentError(data.error);
+      });
+
       socket.on('matchmaking:waiting', () => {});
       socket.on('matchmaking:error', (data) => { setWaiting(false); setChallengeError(data.error); });
 
@@ -153,7 +277,39 @@ export default function LobbyPage() {
       setWaiting(false);
       setChallengeError(err.message);
     }
-  }, [walletAddress, selectedStake, router]);
+  }, [walletAddress, selectedStake, router, paymentPhase, refreshBalance]);
+
+  // ---- Pay for matched game ----
+  const handlePay = useCallback(() => {
+    if (!walletAddress || !paymentPhase) return;
+    setPaymentStatus('paying');
+    setPaymentError('');
+    const socket = getSocket(walletAddress);
+    socket.emit('game:pay', { gameId: paymentPhase.gameId });
+  }, [walletAddress, paymentPhase]);
+
+  // ---- Request refund ----
+  const handleRefund = useCallback(async () => {
+    if (!walletAddress || !paymentPhase) return;
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+      const res = await fetch(backendUrl + '/api/refund', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-wallet-address': walletAddress },
+        body: JSON.stringify({ gameId: paymentPhase.gameId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPaymentStatus('idle');
+        setPaymentPhase(null);
+        refreshBalance();
+      } else {
+        setPaymentError(data.error || 'Refund failed');
+      }
+    } catch (err: any) {
+      setPaymentError('Refund failed');
+    }
+  }, [walletAddress, paymentPhase, refreshBalance]);
 
   const leaveMatchmaking = useCallback(() => {
     if (walletAddress) {
@@ -213,13 +369,110 @@ export default function LobbyPage() {
 
   if (!walletAddress || !player) return null;
 
-  // If matched but no platform wallet configured, go straight to game
+  // ---- PAYMENT PHASE UI ----
+  if (paymentPhase) {
+    const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+    const urgency = paymentPhase.timeLeft <= 15;
+    return (
+      <div className="min-h-screen bg-gradient-dark flex items-center justify-center px-4">
+        <div className="max-w-lg w-full">
+          <div className="text-center mb-8">
+            <img src="/logo.png" alt="CryptoChess" className="w-14 h-14 mx-auto rounded-xl mb-4" />
+            <h1 className="text-2xl font-bold mb-2">{t.payment.title}</h1>
+            <p className="text-white/40">{t.payment.subtitle}</p>
+          </div>
+
+          {/* Timer */}
+          <div className={`card mb-4 text-center ${urgency ? 'border-neon-red/30' : 'border-gold-400/10'}`}>
+            <div className={`text-5xl font-mono font-bold mb-2 ${urgency ? 'text-neon-red animate-pulse' : 'text-gold-400'}`}>
+              {fmt(paymentPhase.timeLeft)}
+            </div>
+            <p className="text-sm text-white/40">{t.payment.timeRemaining}</p>
+          </div>
+
+          {/* Stake info */}
+          <div className="card mb-4">
+            <div className="flex items-center justify-between">
+              <span className="text-white/50">{t.payment.sendTo}</span>
+              <span className="text-gold-400 font-bold text-lg">{paymentPhase.stake} USDC</span>
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-white/50">{t.game.vs}</span>
+              <span className="text-white/70 font-mono text-sm">
+                {paymentPhase.opponent ? paymentPhase.opponent.slice(0, 6) + '...' + paymentPhase.opponent.slice(-4) : '...'}
+              </span>
+            </div>
+          </div>
+
+          {/* Status: idle — show Pay button */}
+          {paymentStatus === 'idle' && (
+            <button onClick={handlePay} className="btn-neon w-full text-lg py-4">
+              💰 {t.profile.deposit} {paymentPhase.stake} USDC
+            </button>
+          )}
+
+          {/* Status: paying */}
+          {paymentStatus === 'paying' && (
+            <div className="card text-center">
+              <Loader2 className="w-8 h-8 text-gold-400 mx-auto animate-spin mb-2" />
+              <p className="text-white/50">{t.payment.sending}</p>
+            </div>
+          )}
+
+          {/* Status: paid — waiting for rival */}
+          {paymentStatus === 'waiting_rival' && (
+            <div className="card text-center">
+              <div className="badge-green mb-3">✓ {t.payment.paymentSent}</div>
+              <Loader2 className="w-6 h-6 text-gold-400 mx-auto animate-spin mb-2" />
+              <p className="text-white/50">{t.lobby.waitingForOpponent}</p>
+              <p className="text-xs text-white/30 mt-1">{t.payment.waitingConfirmation}</p>
+            </div>
+          )}
+
+          {/* Status: rival left — rematching */}
+          {paymentStatus === 'rematching' && (
+            <div className="card text-center">
+              <div className="badge-yellow mb-3">⚠ {t.lobby.opponentLeft}</div>
+              <Loader2 className="w-6 h-6 text-neon-blue mx-auto animate-spin mb-2" />
+              <p className="text-white/50">{t.lobby.rematching}</p>
+            </div>
+          )}
+
+          {/* Status: refund available */}
+          {paymentStatus === 'refund_available' && (
+            <div className="space-y-3">
+              <div className="card text-center border-neon-red/20">
+                <AlertCircle className="w-8 h-8 text-neon-red mx-auto mb-2" />
+                <p className="text-white/50 mb-1">{t.lobby.noMatchFound}</p>
+                <p className="text-xs text-white/30">{t.lobby.refundAvailable}</p>
+              </div>
+              <button onClick={handleRefund} className="btn-danger w-full text-lg py-4">
+                ↩ {t.lobby.refund} {paymentPhase.stake} USDC
+              </button>
+            </div>
+          )}
+
+          {/* Error */}
+          {paymentStatus === 'error' && (
+            <div className="card text-center border-neon-red/20">
+              <AlertCircle className="w-8 h-8 text-neon-red mx-auto mb-2" />
+              <p className="text-neon-red text-sm">{paymentError}</p>
+              <button onClick={handlePay} className="btn-primary mt-4">{t.payment.tryAgain}</button>
+            </div>
+          )}
+
+          <HypePhrases className="justify-center mt-6" />
+        </div>
+      </div>
+    );
+  }
+
+  // Legacy pendingGame flow (for challenges)
   if (pendingGame && !PLATFORM_WALLET) {
     router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
     return null;
   }
 
-  // Payment Lock Screen overlay (only when platform wallet is set)
   if (pendingGame && PLATFORM_WALLET) {
     return (
       <PaymentLockScreen

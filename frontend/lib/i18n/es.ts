@@ -67,6 +67,11 @@ const es: TranslationKeys = {
     enterCode: 'Ingresa el código (ej. ABC123)',
     join: 'Unirse',
     stake: 'Apuesta:',
+    opponentLeft: 'El oponente no pagó',
+    rematching: 'Buscando otro rival para ti...',
+    noMatchFound: 'No se encontró partida. Tu apuesta está segura.',
+    refundAvailable: 'Ahora puedes solicitar el reembolso de tu apuesta.',
+    refund: 'Reembolsar',
   },
 
   payment: {

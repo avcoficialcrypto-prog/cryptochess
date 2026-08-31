@@ -22,9 +22,11 @@ const gameRoutes = require('./routes/games');
 const solanaRoutes = require('./routes/solana');
 const tempWalletRoutes = require('./routes/temp-wallet');
 const turnstileRoutes = require('./routes/turnstile');
+const refundRoutes = require('./routes/refund');
 const { authenticateSocket } = require('./middleware/auth');
 const escrow = require('./services/escrow');
 const matchmaking = require('./services/matchmaking');
+const paymentPhase = require('./services/payment-phase');
 const changenow = require('./services/changenow');
 const { query, initDB } = require('./db/connection');
 
@@ -65,6 +67,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/games', gameRoutes);
 app.use('/api/solana', solanaRoutes);
 app.use('/api/turnstile', turnstileRoutes);
+app.use('/api/refund', refundRoutes);
 app.use('/api/temp-wallet', tempWalletRoutes);
 
 /**
@@ -184,44 +187,122 @@ io.on('connection', (socket) => {
         const gameId = matchResult.gameId;
         const opponent = matchResult.opponent;
 
-        // Lock wagers for both players
-        await escrow.lockWager(
+        // DON'T lock wagers yet — start payment phase (60s timer)
+        const paymentData = paymentPhase.startPaymentPhase(
+          gameId,
           socket.walletAddress,
           opponent.walletAddress,
-          stakeAmount,
-          gameId
+          stakeAmount
         );
 
-        // Initialize chess game
-        const chess = new Chess();
-        activeGames.set(gameId, {
-          chess,
-          white: { wallet: socket.walletAddress, socketId: socket.id },
-          black: { wallet: opponent.walletAddress, socketId: opponent.socketId },
-          stake: stakeAmount,
-          moveHistory: [],
-          startTime: Date.now()
-        });
+        // Create game record (status: payment_pending)
+        await query(
+          `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
+           VALUES ($1, $2, $3, $4, 'payment_pending')`,
+          [gameId, socket.walletAddress, opponent.walletAddress, stakeAmount]
+        );
 
         // Join game rooms for both players
         socket.join(`game:${gameId}`);
         const oppSocket = io.sockets.sockets.get(opponent.socketId);
         if (oppSocket) oppSocket.join(`game:${gameId}`);
 
-        // Notify opponent (black)
-        io.to(opponent.socketId).emit('game:matched', {
+        // Notify opponent (black) — payment required
+        io.to(opponent.socketId).emit('payment:required', {
           gameId,
           color: 'black',
           stake: stakeAmount,
-          opponent: { wallet: socket.walletAddress }
+          opponent: { wallet: socket.walletAddress },
+          timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
         });
 
-        // Notify this player (white)
-        socket.emit('game:matched', {
+        // Notify this player (white) — payment required
+        socket.emit('payment:required', {
           gameId,
           color: 'white',
           stake: stakeAmount,
-          opponent: { wallet: opponent.walletAddress }
+          opponent: { wallet: opponent.walletAddress },
+          timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
+        });
+
+        console.log(`[WS] Match found, payment phase started: ${gameId} | ${stakeAmount} USDC`);
+      } else {
+        socket.emit('matchmaking:waiting', { stakeAmount });
+      }
+    } catch (err) {
+      console.error('[WS] Matchmaking error:', err.message);
+      socket.emit('matchmaking:error', { error: err.message });
+    }
+  });
+
+  // --------------------------------------------------------
+  // CONFIRM PAYMENT (after match found)
+  // --------------------------------------------------------
+  socket.on('game:pay', async (data) => {
+    try {
+      const { gameId } = data;
+      const payment = paymentPhase.getPendingPayment(gameId);
+      if (!payment) {
+        socket.emit('payment:error', { error: 'No pending payment' });
+        return;
+      }
+
+      const stakeAmount = payment.stakeAmount;
+
+      // Lock this player's wager
+      const lockResult = await escrow.lockSingleWager(socket.walletAddress, stakeAmount, gameId);
+      if (!lockResult.success) {
+        socket.emit('payment:error', { error: lockResult.error || 'Payment failed' });
+        return;
+      }
+
+      // Mark as paid
+      const result = paymentPhase.markPaid(gameId, socket.walletAddress);
+
+      if (result.error) {
+        socket.emit('payment:error', { error: result.error });
+        return;
+      }
+
+      // Notify both players of payment status
+      io.to(`game:${gameId}`).emit('payment:status', {
+        paid: socket.walletAddress,
+        bothPaid: result.bothPaid,
+      });
+
+      if (result.bothPaid) {
+        // Both paid — initialize chess game and start!
+        const chess = new Chess();
+        activeGames.set(gameId, {
+          chess,
+          white: { wallet: payment.white, socketId: null },
+          black: { wallet: payment.black, socketId: null },
+          stake: stakeAmount,
+          moveHistory: [],
+          startTime: Date.now()
+        });
+
+        // Find socket IDs for both players
+        for (const [sid, s] of io.sockets.sockets) {
+          if (s.walletAddress === payment.white) activeGames.get(gameId).white.socketId = sid;
+          if (s.walletAddress === payment.black) activeGames.get(gameId).black.socketId = sid;
+        }
+
+        // Update game status
+        await query(
+          `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
+          [gameId]
+        );
+
+        // Send game start to both
+        const whiteShort = payment.white.slice(0, 6) + '...' + payment.white.slice(-4);
+        const blackShort = payment.black.slice(0, 6) + '...' + payment.black.slice(-4);
+
+        io.to(`game:${gameId}`).emit('game:started', {
+          gameId,
+          stake: stakeAmount,
+          white: payment.white,
+          black: payment.black,
         });
 
         // Send initial board state
@@ -230,17 +311,36 @@ io.on('connection', (socket) => {
           turn: chess.turn(),
           moveNumber: chess.moveNumber(),
           status: 'active',
-          whitePlayer: socket.walletAddress.slice(0, 6) + '...' + socket.walletAddress.slice(-4),
-          blackPlayer: opponent.walletAddress.slice(0, 6) + '...' + opponent.walletAddress.slice(-4),
+          whitePlayer: whiteShort,
+          blackPlayer: blackShort,
         });
 
-        console.log(`[WS] Match started: ${gameId} | ${stakeAmount} USDC`);
+        console.log(`[WS] Both paid, game started: ${gameId} | ${stakeAmount} USDC`);
       } else {
-        socket.emit('matchmaking:waiting', { stakeAmount });
+        // Waiting for the other player
+        socket.emit('payment:waiting', { waitingFor: result.waitingFor });
       }
     } catch (err) {
-      console.error('[WS] Matchmaking error:', err.message);
-      socket.emit('matchmaking:error', { error: err.message });
+      console.error('[WS] Payment error:', err.message);
+      socket.emit('payment:error', { error: 'Payment processing failed' });
+    }
+  });
+
+  // --------------------------------------------------------
+  // REQUEST REFUND
+  // --------------------------------------------------------
+  socket.on('game:refund', async (data) => {
+    try {
+      const { gameId } = data;
+      const result = await paymentPhase.refundPlayer(socket.walletAddress, gameId);
+      if (result.success) {
+        socket.emit('payment:refunded', { amount: result.amount });
+      } else {
+        socket.emit('payment:error', { error: result.error });
+      }
+    } catch (err) {
+      console.error('[WS] Refund error:', err.message);
+      socket.emit('payment:error', { error: 'Refund failed' });
     }
   });
 
@@ -561,6 +661,59 @@ io.on('connection', (socket) => {
     connectedUsers.delete(socket.id);
 
     matchmaking.cleanupPlayer(socket.walletAddress);
+
+    // Handle pending payments — if in payment phase, handle the departure
+    for (const [gameId, payment] of paymentPhase.pendingPayments) {
+      if (payment.white === socket.walletAddress || payment.black === socket.walletAddress) {
+        const cancelResult = paymentPhase.cancelPayment(gameId, socket.walletAddress);
+        if (cancelResult && cancelResult.action === 'requeue') {
+          // The other player paid — requeue them
+          const oppSocketId = [...io.sockets.sockets.entries()]
+            .find(([id, s]) => s.walletAddress === cancelResult.paidWallet)?.[0];
+          if (oppSocketId) {
+            io.to(oppSocketId).emit('payment:opponent_left', {
+              gameId,
+              stakeAmount: cancelResult.stakeAmount,
+              message: 'Your opponent did not pay. Matching you with a new rival...',
+            });
+            // Re-queue the paid player
+            matchmaking.joinQueue(cancelResult.paidWallet, cancelResult.stakeAmount, oppSocketId)
+              .then(async (reMatch) => {
+                if (reMatch.status === 'matched') {
+                  // Got a new match immediately — start payment phase
+                  const newPayment = paymentPhase.startPaymentPhase(
+                    reMatch.gameId,
+                    cancelResult.paidWallet,
+                    reMatch.opponent.walletAddress,
+                    cancelResult.stakeAmount
+                  );
+                  await query(
+                    `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
+                     VALUES ($1, $2, $3, $4, 'payment_pending')`,
+                    [reMatch.gameId, cancelResult.paidWallet, reMatch.opponent.walletAddress, cancelResult.stakeAmount]
+                  );
+                  io.to(oppSocketId).emit('payment:required', {
+                    gameId: reMatch.gameId,
+                    color: 'white',
+                    stake: cancelResult.stakeAmount,
+                    opponent: { wallet: reMatch.opponent.walletAddress },
+                    timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
+                  });
+                } else {
+                  // No immediate match — make eligible for refund after 60s
+                  paymentPhase.makeRefundEligible(cancelResult.paidWallet, gameId, cancelResult.stakeAmount);
+                  io.to(oppSocketId).emit('payment:waiting_refund', {
+                    gameId,
+                    stakeAmount: cancelResult.stakeAmount,
+                    refundEligibleAt: Date.now() + paymentPhase.REMATCH_TIMEOUT_MS,
+                  });
+                }
+              }).catch(err => console.error('[WS] Re-queue error:', err.message));
+          }
+        }
+        // If action is 'cancel' — nothing to do, both players weren't paid
+      }
+    }
 
     // Handle active games — opponent wins by disconnect
     for (const [gameId, gameData] of activeGames) {
