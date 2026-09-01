@@ -3,13 +3,11 @@
 import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth-context";
-import { api } from "@/lib/api";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import HypePhrases from "@/components/HypePhrases";
 import { sounds } from "@/lib/sounds";
 import {
-  Zap, Users, Wallet, ArrowDownToLine, Copy, Check,
-  Plus, LogOut, Link,
+  Zap, Users, Copy, Check, LogOut, Link,
 } from "lucide-react";
 
 export default function Dashboard({ player, walletAddress, disconnect, router }: any) {
@@ -18,22 +16,8 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
   const shortAddr = walletAddress
     ? walletAddress.slice(0, 4) + "..." + walletAddress.slice(-4)
     : "Guest";
-  const [showDeposit, setShowDeposit] = useState(false);
-  const [depositing, setDepositing] = useState(false);
-  const [depositSuccess, setDepositSuccess] = useState(false);
   const [copied, setCopied] = useState(false);
   const [connectingWallet, setConnectingWallet] = useState(false);
-
-  const handleDeposit = async (amount: number) => {
-    setDepositing(true);
-    sounds.click();
-    try {
-      await api.deposit(amount);
-      setDepositSuccess(true);
-      setTimeout(() => { setDepositSuccess(false); setShowDeposit(false); window.location.reload(); }, 2000);
-    } catch (err) { console.error("Deposit failed:", err); }
-    finally { setDepositing(false); }
-  };
 
   const copyAddress = async () => {
     await navigator.clipboard.writeText(walletAddress);
@@ -69,7 +53,7 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
           </div>
           <div className="flex items-center gap-3">
             <LanguageSwitcher />
-            {/* Phantom Connect Button (optional) */}
+            {/* Phantom Connect Button (optional — for real payouts) */}
             <button
               onClick={handleConnectPhantom}
               disabled={connectingWallet}
@@ -97,11 +81,7 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-12 animate-entrance-up">
-          <div className="card text-center py-5">
-            <div className="text-3xl font-bold text-gold-400">{player?.balance_usdc?.toFixed(2) || "0.00"}</div>
-            <div className="text-xs text-white/40 mt-1">{t.usdc} {t.dashboard.balance}</div>
-          </div>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-12 animate-entrance-up">
           <div className="card text-center py-5">
             <div className="text-3xl font-bold text-white">{player?.total_games_played || 0}</div>
             <div className="text-xs text-white/40 mt-1">{t.dashboard.gamesPlayed}</div>
@@ -112,13 +92,13 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
             </div>
             <div className="text-xs text-white/40 mt-1">{t.dashboard.winRate}</div>
           </div>
-          <div className="card text-center py-5">
+          <div className="card text-center py-5 col-span-2 lg:col-span-1">
             <div className="text-3xl font-bold text-neon-green">{player?.total_earnings_usdc?.toFixed(2) || "0.00"}</div>
-            <div className="text-xs text-white/40 mt-1">{t.dashboard.totalEarned}</div>
+            <div className="text-xs text-white/40 mt-1">Total Earned (USDC)</div>
           </div>
         </div>
 
-        {/* Game Mode Buttons — DESKTOP: side by side, MOBILE: stacked */}
+        {/* Game Mode Buttons */}
         <div className="grid sm:grid-cols-2 gap-4 sm:gap-6 mb-8 animate-entrance-up">
           <button onClick={() => { sounds.click(); router.push("/lobby?mode=quick"); }} className="group relative overflow-hidden rounded-2xl border border-gold-400/20 bg-gradient-to-br from-gold-400/10 to-dark-800 p-6 sm:p-8 lg:p-10 text-left transition-all duration-300 hover:border-gold-400/40 hover:shadow-[0_0_60px_rgba(250,204,21,0.12)] hover:scale-[1.02] active:scale-[0.98]">
             <div className="absolute inset-0 bg-gradient-to-br from-gold-400/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -129,7 +109,7 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
               <div>
                 <h3 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-1">{t.lobby.quickMatch}</h3>
                 <p className="text-sm sm:text-base text-white/40">{t.dashboard.quickMatchDesc}</p>
-                <div className="mt-2 text-xs text-gold-400/60 font-medium">Auto-matched in seconds</div>
+                <div className="mt-2 text-xs text-gold-400/60 font-medium">Pay with Solana Pay after matching</div>
               </div>
             </div>
           </button>
@@ -149,37 +129,24 @@ export default function Dashboard({ player, walletAddress, disconnect, router }:
           </button>
         </div>
 
-        {/* Deposit */}
-        <div className="animate-entrance-up mb-8">
-          <button onClick={() => { sounds.click(); setShowDeposit(!showDeposit); }} className="w-full card-glow flex items-center justify-center gap-3 py-5 text-lg font-bold hover:border-neon-green/30 transition-all">
-            <ArrowDownToLine className="w-5 h-5 text-neon-green" />
-            {t.profile.depositUsdc}
-            <Plus className="w-4 h-4 text-neon-green" />
-          </button>
-        </div>
-
-        {showDeposit && (
-          <div className="card mb-8 animate-scale-in">
-            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Wallet className="w-5 h-5 text-neon-green" />
-              {t.profile.depositUsdc}
-            </h3>
-            <p className="text-sm text-white/40 mb-4">{t.profile.demoMode}</p>
-            <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 mb-4">
-              {[5, 10, 25, 50, 100].map((amount) => (
-                <button key={amount} onClick={() => handleDeposit(amount)} disabled={depositing} className="card text-center py-4 hover:border-neon-green/30 transition-all hover:scale-105 active:scale-95 disabled:opacity-50">
-                  <div className="text-xl font-bold text-neon-green">{amount}</div>
-                  <div className="text-xs text-white/40">{t.usdc}</div>
-                </button>
-              ))}
+        {/* How it works */}
+        <div className="card mb-8 animate-entrance-up">
+          <h3 className="text-lg font-bold mb-4 text-center">How It Works</h3>
+          <div className="grid sm:grid-cols-3 gap-4 text-center">
+            <div className="p-4">
+              <div className="text-3xl mb-2">♟️</div>
+              <p className="text-sm text-white/50"><strong className="text-white">1.</strong> Choose stake & find a match</p>
             </div>
-            {depositSuccess && (
-              <div className="text-neon-green text-sm bg-neon-green/10 rounded-xl px-4 py-3 text-center font-medium">
-                Deposit successful! Balance updated.
-              </div>
-            )}
+            <div className="p-4">
+              <div className="text-3xl mb-2">💳</div>
+              <p className="text-sm text-white/50"><strong className="text-white">2.</strong> Pay via Solana Pay QR (60s)</p>
+            </div>
+            <div className="p-4">
+              <div className="text-3xl mb-2">🏆</div>
+              <p className="text-sm text-white/50"><strong className="text-white">3.</strong> Winner gets USDC sent to their wallet</p>
+            </div>
           </div>
-        )}
+        </div>
 
         <div className="animate-entrance-up">
           <HypePhrases showRefresh />

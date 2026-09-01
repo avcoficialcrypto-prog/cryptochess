@@ -28,6 +28,8 @@ const escrow = require('./services/escrow');
 const matchmaking = require('./services/matchmaking');
 const paymentPhase = require('./services/payment-phase');
 const changenow = require('./services/changenow');
+const solanaMonitor = require('./services/solana-monitor');
+const solanaPayout = require('./services/solana-payout');
 const { query, initDB } = require('./db/connection');
 
 // Track which games each player is in (wallet -> Set<gameId>)
@@ -128,6 +130,54 @@ const activeGames = new Map();
 // Connected users: socketId -> walletAddress
 const connectedUsers = new Map();
 
+/**
+ * Helper: Start a game after both players have paid on-chain
+ */
+async function startGame(gameId, payment, stakeAmount, io, activeGames, query) {
+  const chess = new Chess();
+  activeGames.set(gameId, {
+    chess,
+    white: { wallet: payment.white, socketId: null },
+    black: { wallet: payment.black, socketId: null },
+    stake: stakeAmount,
+    moveHistory: [],
+    startTime: Date.now()
+  });
+
+  // Find socket IDs for both players
+  for (const [sid, s] of io.sockets.sockets) {
+    if (s.walletAddress === payment.white) activeGames.get(gameId).white.socketId = sid;
+    if (s.walletAddress === payment.black) activeGames.get(gameId).black.socketId = sid;
+  }
+
+  // Update game status
+  await query(
+    `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
+    [gameId]
+  );
+
+  const whiteShort = payment.white.slice(0, 6) + '...' + payment.white.slice(-4);
+  const blackShort = payment.black.slice(0, 6) + '...' + payment.black.slice(-4);
+
+  io.to(`game:${gameId}`).emit('game:started', {
+    gameId,
+    stake: stakeAmount,
+    white: payment.white,
+    black: payment.black,
+  });
+
+  io.to(`game:${gameId}`).emit('game:state', {
+    fen: chess.fen(),
+    turn: chess.turn(),
+    moveNumber: chess.moveNumber(),
+    status: 'active',
+    whitePlayer: whiteShort,
+    blackPlayer: blackShort,
+  });
+
+  console.log(`[WS] Both paid on-chain, game started: ${gameId} | ${stakeAmount} USDC`);
+}
+
 // ============================================================
 // Socket.io Wallet Auth Middleware
 // ============================================================
@@ -160,21 +210,18 @@ io.on('connection', (socket) => {
     try {
       const { stakeAmount } = data;
 
-      // Ensure player exists and has balance
+      // Ensure player exists (no balance check — they pay on-chain after match)
       let result = await query(
         'SELECT * FROM players WHERE wallet_address = $1',
         [socket.walletAddress]
       );
 
       if (result.rows.length === 0) {
-        socket.emit('matchmaking:error', { error: 'Connect your wallet first' });
-        return;
-      }
-
-      const player = result.rows[0];
-      if (parseFloat(player.balance_usdc) < stakeAmount) {
-        socket.emit('matchmaking:error', { error: 'Insufficient balance' });
-        return;
+        // Auto-create player record
+        await query(
+          'INSERT OR IGNORE INTO players (wallet_address, balance_usdc) VALUES ($1, 0)',
+          [socket.walletAddress]
+        );
       }
 
       const matchResult = await matchmaking.joinQueue(
@@ -238,6 +285,12 @@ io.on('connection', (socket) => {
   // --------------------------------------------------------
   // CONFIRM PAYMENT (after match found)
   // --------------------------------------------------------
+  // --------------------------------------------------------
+  // CONFIRM PAYMENT — Player sends real USDC on-chain
+  // The frontend generates Solana Pay QR for the platform wallet.
+  // Backend monitors the platform wallet for incoming USDC.
+  // game:pay = player confirms they have sent the tx
+  // --------------------------------------------------------
   socket.on('game:pay', async (data) => {
     try {
       const { gameId } = data;
@@ -249,77 +302,42 @@ io.on('connection', (socket) => {
 
       const stakeAmount = payment.stakeAmount;
 
-      // Lock this player's wager
-      const lockResult = await escrow.lockSingleWager(socket.walletAddress, stakeAmount, gameId);
-      if (!lockResult.success) {
-        socket.emit('payment:error', { error: lockResult.error || 'Payment failed' });
-        return;
-      }
+      // Start monitoring the platform wallet for this player's payment
+      // This will poll Solana RPC and detect the USDC transfer
+      solanaMonitor.startMonitoring(
+        gameId,
+        socket.walletAddress,
+        stakeAmount,
+        // onConfirmed — real payment detected on-chain!
+        async (paymentData) => {
+          console.log(`[WS] On-chain payment confirmed for ${socket.walletAddress.slice(0, 8)} in game ${gameId.slice(0, 8)}`);
 
-      // Mark as paid
-      const result = paymentPhase.markPaid(gameId, socket.walletAddress);
+          // Mark as paid in payment phase
+          const result = paymentPhase.markPaid(gameId, socket.walletAddress);
+          if (result.error) return;
 
-      if (result.error) {
-        socket.emit('payment:error', { error: result.error });
-        return;
-      }
+          // Notify both players
+          io.to(`game:${gameId}`).emit('payment:status', {
+            paid: socket.walletAddress,
+            bothPaid: result.bothPaid,
+            signature: paymentData.signature,
+          });
 
-      // Notify both players of payment status
-      io.to(`game:${gameId}`).emit('payment:status', {
-        paid: socket.walletAddress,
-        bothPaid: result.bothPaid,
-      });
-
-      if (result.bothPaid) {
-        // Both paid — initialize chess game and start!
-        const chess = new Chess();
-        activeGames.set(gameId, {
-          chess,
-          white: { wallet: payment.white, socketId: null },
-          black: { wallet: payment.black, socketId: null },
-          stake: stakeAmount,
-          moveHistory: [],
-          startTime: Date.now()
-        });
-
-        // Find socket IDs for both players
-        for (const [sid, s] of io.sockets.sockets) {
-          if (s.walletAddress === payment.white) activeGames.get(gameId).white.socketId = sid;
-          if (s.walletAddress === payment.black) activeGames.get(gameId).black.socketId = sid;
+          if (result.bothPaid) {
+            // Both paid — initialize chess game and start!
+            await startGame(gameId, payment, stakeAmount, io, activeGames, query);
+          } else {
+            socket.emit('payment:waiting', { waitingFor: result.waitingFor });
+          }
+        },
+        // onTimeout — 90s passed, no payment detected
+        ({ gameId: gid, wallet }) => {
+          console.log(`[WS] Payment monitoring timed out for ${wallet.slice(0, 8)} in ${gid.slice(0, 8)}`);
+          socket.emit('payment:error', { error: 'Payment not detected on-chain. Make sure you sent the correct USDC amount.' });
         }
+      );
 
-        // Update game status
-        await query(
-          `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
-          [gameId]
-        );
-
-        // Send game start to both
-        const whiteShort = payment.white.slice(0, 6) + '...' + payment.white.slice(-4);
-        const blackShort = payment.black.slice(0, 6) + '...' + payment.black.slice(-4);
-
-        io.to(`game:${gameId}`).emit('game:started', {
-          gameId,
-          stake: stakeAmount,
-          white: payment.white,
-          black: payment.black,
-        });
-
-        // Send initial board state
-        io.to(`game:${gameId}`).emit('game:state', {
-          fen: chess.fen(),
-          turn: chess.turn(),
-          moveNumber: chess.moveNumber(),
-          status: 'active',
-          whitePlayer: whiteShort,
-          blackPlayer: blackShort,
-        });
-
-        console.log(`[WS] Both paid, game started: ${gameId} | ${stakeAmount} USDC`);
-      } else {
-        // Waiting for the other player
-        socket.emit('payment:waiting', { waitingFor: result.waitingFor });
-      }
+      socket.emit('payment:monitoring', { message: 'Monitoring Solana blockchain for your payment...' });
     } catch (err) {
       console.error('[WS] Payment error:', err.message);
       socket.emit('payment:error', { error: 'Payment processing failed' });
@@ -531,11 +549,11 @@ io.on('connection', (socket) => {
         gameState.winnerWallet = winnerWallet;
         gameState.resultMessage = resultMessage;
 
-        // Settle financially
+        // Settle financially — real USDC payout from platform wallet
         if (isCheckmate) {
-          await escrow.settleGame(gameId, winnerWallet);
+          await solanaPayout.settleAndPayout(gameId, winnerWallet);
         } else {
-          await escrow.settleDraw(gameId);
+          await solanaPayout.settleAndPayout(gameId, null); // draw
         }
 
         activeGames.delete(gameId);
@@ -566,7 +584,7 @@ io.on('connection', (socket) => {
       const winnerWallet = gameData.white.wallet === socket.walletAddress
         ? gameData.black.wallet : gameData.white.wallet;
 
-      await escrow.settleGame(gameId, winnerWallet);
+      await solanaPayout.settleAndPayout(gameId, winnerWallet);
 
       io.to(`game:${gameId}`).emit('game:state', {
         fen: gameData.chess.fen(),
@@ -598,7 +616,7 @@ io.on('connection', (socket) => {
     try {
       const gameData = activeGames.get(data.gameId);
       if (!gameData) return;
-      await escrow.settleDraw(data.gameId);
+      await solanaPayout.settleAndPayout(data.gameId, null);
       io.to(`game:${data.gameId}`).emit('game:state', {
         fen: gameData.chess.fen(),
         status: 'draw',
@@ -759,6 +777,8 @@ server.listen(PORT, () => {
   console.log(`  ╚══════════════════════════════════════════╝\n`);
 
   changenow.startSweepMonitor();
+  solanaMonitor.init();
+  solanaPayout.init();
 });
 
 process.on('SIGTERM', () => {

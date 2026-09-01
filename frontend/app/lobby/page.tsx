@@ -1,6 +1,7 @@
 // ============================================================
-// CryptoChess - Lobby Page (No Wallet Required)
-// Quick Match & Challenge Friend
+// CryptoChess - Lobby Page
+// Quick Match & Challenge Friend with REAL Solana Pay
+// No fake balances — pay on-chain after match found
 // ============================================================
 
 'use client';
@@ -13,17 +14,34 @@ import { api } from '@/lib/api';
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import HypePhrases from '@/components/HypePhrases';
-import PaymentLockScreen from '@/components/PaymentLockScreen';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   Zap, Users, Copy, Check, Clock, ArrowLeft,
-  Swords, Link2, Loader2, AlertCircle, ShieldCheck, DollarSign,
+  Swords, Link2, Loader2, AlertCircle, ShieldCheck,
+  ExternalLink, Wallet,
 } from 'lucide-react';
 
 const STAKE_OPTIONS = [1, 5, 10, 50, 100];
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PLATFORM_WALLET = process.env.NEXT_PUBLIC_PLATFORM_WALLET || '';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+
+/**
+ * Generate a Solana Pay URL for USDC payment
+ */
+function getSolanaPayUrl(recipient: string, amount: number, memo: string): string {
+  const params = new URLSearchParams({
+    amount: amount.toString(),
+    splToken: USDC_MINT,
+    memo,
+    label: 'CryptoChess - Game Stake',
+    message: `Pay ${amount} USDC to play chess`,
+  });
+  return `solana:${recipient}?${params.toString()}`;
+}
 
 export default function LobbyPage() {
-  const { player, walletAddress, refreshBalance } = useAuth();
+  const { player, walletAddress } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -51,13 +69,7 @@ export default function LobbyPage() {
   const recaptchaWidgetId = useRef<number | null>(null);
   const [queueStatus, setQueueStatus] = useState<Record<number, number>>({});
 
-  const [pendingGame, setPendingGame] = useState<{
-    gameId: string;
-    color: string;
-    stake: number;
-  } | null>(null);
-
-  // Payment phase state
+  // Payment phase — after match found, both players must pay real USDC
   const [paymentPhase, setPaymentPhase] = useState<{
     gameId: string;
     color: string;
@@ -65,16 +77,11 @@ export default function LobbyPage() {
     opponent: string;
     timeLeft: number;
   } | null>(null);
-  const [paymentStatus, setPaymentStatus] = useState<'idle' | 'paying' | 'paid' | 'waiting_rival' | 'rival_left' | 'rematching' | 'refund_available' | 'error'>('idle');
+  const [paymentStatus, setPaymentStatus] = useState<
+    'idle' | 'monitoring' | 'paid' | 'waiting_rival' | 'rival_left' | 'rematching' | 'refund_available' | 'error'
+  >('idle');
   const [paymentError, setPaymentError] = useState('');
-  const [refundEligibleAt, setRefundEligibleAt] = useState<number | null>(null);
-  const [refundCountdown, setRefundCountdown] = useState(0);
-
-  // Deposit state
-  const [showDeposit, setShowDeposit] = useState(false);
-  const [depositAmount, setDepositAmount] = useState(0);
-  const [depositing, setDepositing] = useState(false);
-  const [depositSuccess, setDepositSuccess] = useState(false);
+  const [paymentSignature, setPaymentSignature] = useState('');
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -102,29 +109,17 @@ export default function LobbyPage() {
     return () => clearInterval(timer);
   }, [paymentPhase?.gameId, paymentStatus]);
 
-  // Refund countdown timer
-  useEffect(() => {
-    if (!refundEligibleAt || paymentStatus !== 'refund_available') return;
-    const timer = setInterval(() => {
-      const remaining = Math.max(0, Math.floor((refundEligibleAt - Date.now()) / 1000));
-      setRefundCountdown(remaining);
-      if (remaining <= 0) clearInterval(timer);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [refundEligibleAt, paymentStatus]);
-
-  // Auto-navigate when game starts (both paid)
+  // Auto-navigate when game starts
   useEffect(() => {
     if (paymentStatus === 'paid' && paymentPhase) {
       router.push(`/play/${paymentPhase.gameId}?color=${paymentPhase.color}&stake=${paymentPhase.stake}`);
     }
   }, [paymentStatus, paymentPhase, router]);
 
-  // ---- reCAPTCHA v2 Verification ----
+  // ---- reCAPTCHA v2 ----
   const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY || '';
 
   useEffect(() => {
-    // Wait for Google reCAPTCHA script to load, then render the widget
     const checkReady = setInterval(() => {
       if (typeof window !== 'undefined' && (window as any).grecaptcha && recaptchaRef.current && !captchaReady) {
         clearInterval(checkReady);
@@ -135,55 +130,27 @@ export default function LobbyPage() {
               setCaptchaToken(token);
               setCaptchaLoading(true);
               setCaptchaError(null);
-              // Verify with backend
-              const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
-              fetch(backendUrl + '/api/turnstile/verify', {
+              fetch(BACKEND_URL + '/api/turnstile/verify', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ token }),
               })
                 .then(r => r.json())
-                .then(data => {
-                  if (data.success) {
-                    setCaptchaVerified(true);
-                  } else {
-                    setCaptchaError('Verification failed. Please try again.');
-                    setCaptchaVerified(false);
-                  }
-                })
-                .catch(() => {
-                  setCaptchaError('Verification error. Please try again.');
-                  setCaptchaVerified(false);
-                })
+                .then(data => { setCaptchaVerified(data.success); if (!data.success) setCaptchaError('Verification failed.'); })
+                .catch(() => { setCaptchaError('Verification error.'); setCaptchaVerified(false); })
                 .finally(() => setCaptchaLoading(false));
             },
-            'expired-callback': () => {
-              setCaptchaToken(null);
-              setCaptchaVerified(false);
-            },
-            'error-callback': () => {
-              setCaptchaError('Captcha error. Please reload.');
-              setCaptchaVerified(false);
-            },
+            'expired-callback': () => { setCaptchaToken(null); setCaptchaVerified(false); },
+            'error-callback': () => { setCaptchaError('Captcha error.'); setCaptchaVerified(false); },
             theme: 'dark',
             size: 'normal',
           });
           setCaptchaReady(true);
-        } catch (err) {
-          console.error('reCAPTCHA render error:', err);
-        }
+        } catch (err) { console.error('reCAPTCHA render error:', err); }
       }
     }, 200);
     return () => clearInterval(checkReady);
   }, [RECAPTCHA_SITE_KEY, captchaReady]);
-
-  const resetCaptcha = () => {
-    if (typeof window !== 'undefined' && (window as any).grecaptcha && recaptchaWidgetId.current !== null) {
-      (window as any).grecaptcha.reset(recaptchaWidgetId.current);
-      setCaptchaToken(null);
-      setCaptchaVerified(false);
-    }
-  };
 
   // ---- Quick Match ----
   const joinMatchmaking = useCallback(async () => {
@@ -196,18 +163,12 @@ export default function LobbyPage() {
     try {
       const socket = getSocket(walletAddress);
 
-      // Remove old listeners
-      socket.off('payment:required');
-      socket.off('payment:status');
-      socket.off('payment:waiting');
-      socket.off('payment:opponent_left');
-      socket.off('payment:waiting_refund');
-      socket.off('payment:refunded');
-      socket.off('payment:error');
-      socket.off('matchmaking:waiting');
-      socket.off('matchmaking:error');
+      // Clean old listeners
+      ['payment:required', 'payment:status', 'payment:waiting', 'payment:monitoring',
+       'payment:opponent_left', 'payment:error', 'matchmaking:waiting', 'matchmaking:error'
+      ].forEach(evt => socket.off(evt));
 
-      // Payment required after match
+      // Match found — both players must pay real USDC on-chain
       socket.on('payment:required', (data) => {
         setWaiting(false);
         setPaymentPhase({
@@ -220,56 +181,28 @@ export default function LobbyPage() {
         setPaymentStatus('idle');
       });
 
-      // Other player confirmed payment
+      // Backend confirmed payment detected on-chain
       socket.on('payment:status', (data) => {
         if (data.bothPaid) {
-          // Both paid — game starts, navigate to game page
-          if (paymentPhase) {
-            router.push(`/play/${paymentPhase.gameId}?color=${paymentPhase.color}&stake=${paymentPhase.stake}`);
-          }
+          setPaymentStatus('paid');
         } else {
           setPaymentStatus('waiting_rival');
+          if (data.signature) setPaymentSignature(data.signature);
         }
       });
 
-      // Waiting for rival confirmation
+      socket.on('payment:monitoring', () => {
+        setPaymentStatus('monitoring');
+      });
+
       socket.on('payment:waiting', () => {
         setPaymentStatus('waiting_rival');
       });
 
-      // Opponent left without paying
       socket.on('payment:opponent_left', (data) => {
         setPaymentStatus('rematching');
-        // Update payment phase with new game if re-matched
-        if (data.gameId) {
-          setPaymentPhase({
-            gameId: data.gameId,
-            color: 'white',
-            stake: data.stakeAmount,
-            opponent: '',
-            timeLeft: 60,
-          });
-        }
       });
 
-      // Made eligible for refund after rematch timeout
-      socket.on('payment:waiting_refund', (data) => {
-        setPaymentStatus('refund_available');
-        setRefundEligibleAt(data.refundEligibleAt);
-        if (data.gameId) {
-          setPaymentPhase(prev => prev ? { ...prev, gameId: data.gameId } : null);
-        }
-      });
-
-      // Refund confirmed
-      socket.on('payment:refunded', (data) => {
-        setPaymentStatus('idle');
-        setPaymentPhase(null);
-        setRefundEligibleAt(null);
-        refreshBalance();
-      });
-
-      // Payment error
       socket.on('payment:error', (data) => {
         setPaymentStatus('error');
         setPaymentError(data.error);
@@ -283,39 +216,16 @@ export default function LobbyPage() {
       setWaiting(false);
       setChallengeError(err.message);
     }
-  }, [walletAddress, selectedStake, router, paymentPhase, refreshBalance]);
+  }, [walletAddress, selectedStake, router]);
 
   // ---- Pay for matched game ----
   const handlePay = useCallback(() => {
     if (!walletAddress || !paymentPhase) return;
-    setPaymentStatus('paying');
+    setPaymentStatus('monitoring');
     setPaymentError('');
     const socket = getSocket(walletAddress);
     socket.emit('game:pay', { gameId: paymentPhase.gameId });
   }, [walletAddress, paymentPhase]);
-
-  // ---- Request refund ----
-  const handleRefund = useCallback(async () => {
-    if (!walletAddress || !paymentPhase) return;
-    try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
-      const res = await fetch(backendUrl + '/api/refund', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-wallet-address': walletAddress },
-        body: JSON.stringify({ gameId: paymentPhase.gameId }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPaymentStatus('idle');
-        setPaymentPhase(null);
-        refreshBalance();
-      } else {
-        setPaymentError(data.error || 'Refund failed');
-      }
-    } catch (err: any) {
-      setPaymentError('Refund failed');
-    }
-  }, [walletAddress, paymentPhase, refreshBalance]);
 
   const leaveMatchmaking = useCallback(() => {
     if (walletAddress) {
@@ -330,8 +240,6 @@ export default function LobbyPage() {
     setChallengeLoading(true);
     setChallengeError('');
     try {
-      const stake = customStake ? parseFloat(customStake) : selectedStake;
-      if (!stake || stake <= 0) throw new Error('Invalid stake amount');
       const result = await api.createChallenge(selectedStake, customStake ? parseFloat(customStake) : undefined);
       setInviteCode(result.inviteCode);
     } catch (err: any) { setChallengeError(err.message); }
@@ -345,7 +253,7 @@ export default function LobbyPage() {
     try {
       const socket = getSocket(walletAddress);
       socket.on('game:started', (data) => {
-        setPendingGame({ gameId: data.gameId, color: data.color, stake: data.stake });
+        router.push(`/play/${data.gameId}?color=${data.color}&stake=${data.stake}`);
       });
       socket.on('challenge:error', (data) => { setChallengeError(data.error); setChallengeLoading(false); });
       socket.emit('challenge:join', { inviteCode: joinCode.trim().toUpperCase() });
@@ -359,33 +267,24 @@ export default function LobbyPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ---- Payment callbacks ----
-  const handlePaymentConfirmed = useCallback(() => {
-    if (!pendingGame) return;
-    router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
-  }, [pendingGame, router]);
-
-  const handlePaymentExpired = useCallback(() => {
-    setPendingGame(null);
-    setWaiting(false);
-    if (walletAddress && waitingStake) {
-      getSocket(walletAddress).emit('matchmaking:leave', { stakeAmount: waitingStake });
-    }
-  }, [walletAddress, waitingStake]);
-
   if (!walletAddress || !player) return null;
 
-  // ---- PAYMENT PHASE UI ----
+  // ---- PAYMENT PHASE — Real Solana Pay QR ----
   if (paymentPhase) {
     const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
     const urgency = paymentPhase.timeLeft <= 15;
+
+    const recipient = PLATFORM_WALLET || paymentPhase.opponent;
+    const memo = `CRYPTOCHESS-${paymentPhase.gameId.slice(0, 16)}-${walletAddress.slice(0, 8)}`;
+    const solanaPayUrl = getSolanaPayUrl(recipient, paymentPhase.stake, memo);
+
     return (
       <div className="min-h-screen bg-gradient-dark flex items-center justify-center px-4">
         <div className="max-w-lg w-full">
-          <div className="text-center mb-8">
+          <div className="text-center mb-6">
             <img src="/logo.png" alt="CryptoChess" className="w-14 h-14 mx-auto rounded-xl mb-4" />
-            <h1 className="text-2xl font-bold mb-2">{t.payment.title}</h1>
-            <p className="text-white/40">{t.payment.subtitle}</p>
+            <h1 className="text-2xl font-bold mb-2">⚡ {t.payment.title}</h1>
+            <p className="text-white/40 text-sm">Pay {paymentPhase.stake} USDC via Solana Pay to start the game</p>
           </div>
 
           {/* Timer */}
@@ -394,174 +293,119 @@ export default function LobbyPage() {
               {fmt(paymentPhase.timeLeft)}
             </div>
             <p className="text-sm text-white/40">{t.payment.timeRemaining}</p>
+            <div className="w-full h-1.5 bg-dark-700 rounded-full mt-3 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ${urgency ? 'bg-neon-red' : 'bg-gold-400'}`}
+                style={{ width: `${(paymentPhase.timeLeft / 60) * 100}%` }}
+              />
+            </div>
           </div>
 
-          {/* Stake info */}
+          {/* Stake Info */}
           <div className="card mb-4">
             <div className="flex items-center justify-between">
-              <span className="text-white/50">{t.payment.sendTo}</span>
+              <span className="text-white/50">Stake</span>
               <span className="text-gold-400 font-bold text-lg">{paymentPhase.stake} USDC</span>
             </div>
             <div className="flex items-center justify-between mt-2">
-              <span className="text-white/50">{t.game.vs}</span>
+              <span className="text-white/50">vs</span>
               <span className="text-white/70 font-mono text-sm">
                 {paymentPhase.opponent ? paymentPhase.opponent.slice(0, 6) + '...' + paymentPhase.opponent.slice(-4) : '...'}
               </span>
             </div>
           </div>
 
-          {/* Status: idle — show Pay button */}
+          {/* STATUS: IDLE — Show QR Code + Pay Button */}
           {paymentStatus === 'idle' && (
-            <button onClick={handlePay} className="btn-neon w-full text-lg py-4">
-              💰 {t.profile.deposit} {paymentPhase.stake} USDC
-            </button>
-          )}
-
-          {/* Status: paying */}
-          {paymentStatus === 'paying' && (
-            <div className="card text-center">
-              <Loader2 className="w-8 h-8 text-gold-400 mx-auto animate-spin mb-2" />
-              <p className="text-white/50">{t.payment.sending}</p>
-            </div>
-          )}
-
-          {/* Status: paid — waiting for rival */}
-          {paymentStatus === 'waiting_rival' && (
-            <div className="card text-center">
-              <div className="badge-green mb-3">✓ {t.payment.paymentSent}</div>
-              <Loader2 className="w-6 h-6 text-gold-400 mx-auto animate-spin mb-2" />
-              <p className="text-white/50">{t.lobby.waitingForOpponent}</p>
-              <p className="text-xs text-white/30 mt-1">{t.payment.waitingConfirmation}</p>
-            </div>
-          )}
-
-          {/* Status: rival left — rematching */}
-          {paymentStatus === 'rematching' && (
-            <div className="card text-center">
-              <div className="badge-yellow mb-3">⚠ {t.lobby.opponentLeft}</div>
-              <Loader2 className="w-6 h-6 text-neon-blue mx-auto animate-spin mb-2" />
-              <p className="text-white/50">{t.lobby.rematching}</p>
-            </div>
-          )}
-
-          {/* Status: refund available */}
-          {paymentStatus === 'refund_available' && (
-            <div className="space-y-3">
-              <div className="card text-center border-neon-red/20">
-                <AlertCircle className="w-8 h-8 text-neon-red mx-auto mb-2" />
-                <p className="text-white/50 mb-1">{t.lobby.noMatchFound}</p>
-                <p className="text-xs text-white/30">{t.lobby.refundAvailable}</p>
+            <div className="space-y-4">
+              {/* Real Solana Pay QR Code */}
+              <div className="card text-center">
+                <p className="text-sm text-white/50 mb-3">Scan with Phantom or any Solana wallet</p>
+                <div className="bg-white rounded-xl p-4 inline-block mx-auto mb-3">
+                  <QRCodeSVG
+                    value={solanaPayUrl}
+                    size={200}
+                    level="M"
+                    bgColor="#ffffff"
+                    fgColor="#000000"
+                  />
+                </div>
+                <p className="text-xs text-white/30 mb-2">or tap to open in Phantom</p>
+                <a
+                  href={`https://phantom.app/ul/browse/${encodeURIComponent(solanaPayUrl)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 text-neon-blue text-sm hover:underline"
+                >
+                  Open in Phantom <ExternalLink className="w-3 h-3" />
+                </a>
               </div>
-              <button onClick={handleRefund} className="btn-danger w-full text-lg py-4">
-                ↩ {t.lobby.refund} {paymentPhase.stake} USDC
+
+              {/* Amount to send */}
+              <div className="bg-dark-700 rounded-xl p-3 flex items-center justify-between">
+                <span className="text-white/40 text-sm">Send exactly:</span>
+                <span className="text-gold-400 font-bold">{paymentPhase.stake} USDC</span>
+              </div>
+
+              {/* Recipient address */}
+              <div className="bg-dark-700 rounded-xl p-3">
+                <span className="text-white/40 text-xs block mb-1">To wallet:</span>
+                <code className="text-xs text-white/60 font-mono break-all">{recipient}</code>
+              </div>
+
+              {/* I've sent it button */}
+              <button onClick={handlePay} className="btn-neon w-full text-lg py-4">
+                ✓ I&apos;ve sent {paymentPhase.stake} USDC — Detect Payment
               </button>
             </div>
           )}
 
-          {/* Error */}
+          {/* STATUS: Monitoring blockchain */}
+          {paymentStatus === 'monitoring' && (
+            <div className="card text-center">
+              <Loader2 className="w-10 h-10 text-gold-400 mx-auto animate-spin mb-3" />
+              <p className="text-white/50 mb-2">🔍 Monitoring Solana blockchain...</p>
+              <p className="text-xs text-white/30">Checking for your {paymentPhase.stake} USDC payment</p>
+              <p className="text-xs text-white/20 mt-2">This usually takes 5-30 seconds</p>
+              {paymentSignature && (
+                <a href={`https://solscan.io/tx/${paymentSignature}`} target="_blank" rel="noopener noreferrer" className="text-xs text-neon-blue mt-3 inline-flex items-center gap-1">
+                  View on Solscan <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+          )}
+
+          {/* STATUS: Waiting for rival */}
+          {paymentStatus === 'waiting_rival' && (
+            <div className="card text-center">
+              <div className="badge-green mb-3">✓ Payment detected on-chain!</div>
+              <Loader2 className="w-6 h-6 text-gold-400 mx-auto animate-spin mb-2" />
+              <p className="text-white/50">Waiting for opponent&apos;s payment...</p>
+              <p className="text-xs text-white/30 mt-1">Game starts once both players pay</p>
+            </div>
+          )}
+
+          {/* STATUS: Rival left */}
+          {paymentStatus === 'rematching' && (
+            <div className="card text-center">
+              <div className="badge-yellow mb-3">⚠ Opponent didn&apos;t pay</div>
+              <Loader2 className="w-6 h-6 text-neon-blue mx-auto animate-spin mb-2" />
+              <p className="text-white/50">Searching for a new opponent...</p>
+            </div>
+          )}
+
+          {/* STATUS: Error */}
           {paymentStatus === 'error' && (
             <div className="card text-center border-neon-red/20">
               <AlertCircle className="w-8 h-8 text-neon-red mx-auto mb-2" />
               <p className="text-neon-red text-sm">{paymentError}</p>
-              <button onClick={handlePay} className="btn-primary mt-4">{t.payment.tryAgain}</button>
+              <button onClick={handlePay} className="btn-primary mt-4">Try Again</button>
             </div>
           )}
 
           <HypePhrases className="justify-center mt-6" />
         </div>
       </div>
-    );
-  }
-
-  // ---- INLINE DEPOSIT MODAL ----
-  if (showDeposit) {
-    return (
-      <div className="min-h-screen bg-gradient-dark flex items-center justify-center px-4">
-        <div className="max-w-md w-full">
-          <button onClick={() => { setShowDeposit(false); setDepositSuccess(false); }} className="flex items-center gap-2 text-white/40 hover:text-white mb-8 transition-colors">
-            <ArrowLeft className="w-4 h-4" /><span className="text-sm">{t.back}</span>
-          </button>
-          <div className="text-center mb-6">
-            <div className="w-16 h-16 rounded-2xl bg-neon-green/10 flex items-center justify-center mx-auto mb-4">
-              <DollarSign className="w-8 h-8 text-neon-green" />
-            </div>
-            <h1 className="text-2xl font-bold mb-2">{t.lobby.deposit} USDC</h1>
-            <p className="text-white/40 text-sm">{t.lobby.depositToPlay}</p>
-          </div>
-
-          {depositSuccess ? (
-            <div className="card text-center">
-              <div className="text-5xl mb-4">✅</div>
-              <h2 className="text-xl font-bold text-neon-green mb-2">{t.payment.matchConfirmed || 'Deposit Successful!'}</h2>
-              <p className="text-white/40 text-sm">+{depositAmount} USDC added to your balance</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-white/40 text-center">Select deposit amount:</p>
-              {[5, 10, 25, 50, 100].map((amt) => (
-                <button
-                  key={amt}
-                  onClick={() => setDepositAmount(amt)}
-                  className={`w-full p-4 rounded-xl border transition-all text-left flex items-center justify-between ${depositAmount === amt ? 'border-neon-green/40 bg-neon-green/10' : 'border-white/10 bg-dark-700 hover:border-white/20'}`}
-                >
-                  <span className="flex items-center gap-3">
-                    <span className="text-2xl">💰</span>
-                    <span className="font-bold text-lg">{amt} USDC</span>
-                  </span>
-                  {depositAmount === amt && <Check className="w-5 h-5 text-neon-green" />}
-                </button>
-              ))}
-              <button
-                onClick={async () => {
-                  if (depositAmount <= 0) return;
-                  setDepositing(true);
-                  try {
-                    await api.deposit(depositAmount);
-                    setDepositSuccess(true);
-                    await refreshBalance();
-                    setTimeout(() => {
-                      setShowDeposit(false);
-                      setDepositSuccess(false);
-                    }, 2000);
-                  } catch (err: any) {
-                    console.error('Deposit failed:', err);
-                  } finally {
-                    setDepositing(false);
-                  }
-                }}
-                disabled={depositing || depositAmount <= 0}
-                className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${depositing ? 'bg-dark-700 text-white/30' : 'bg-gradient-to-r from-neon-green to-neon-blue text-white hover:scale-105'}`}
-              >
-                {depositing ? (
-                  <span className="flex items-center justify-center gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Processing...</span>
-                ) : (
-                  `💰 Deposit ${depositAmount} USDC`
-                )}
-              </button>
-            </div>
-          )}
-
-          <HypePhrases className="justify-center mt-6" />
-        </div>
-      </div>
-    );
-  }
-
-  // Legacy pendingGame flow (for challenges)
-  if (pendingGame && !PLATFORM_WALLET) {
-    router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
-    return null;
-  }
-
-  if (pendingGame && PLATFORM_WALLET) {
-    return (
-      <PaymentLockScreen
-        amount={pendingGame.stake}
-        recipientAddress={PLATFORM_WALLET}
-        gameId={pendingGame.gameId}
-        onPaymentConfirmed={handlePaymentConfirmed}
-        onExpired={handlePaymentExpired}
-      />
     );
   }
 
@@ -606,9 +450,6 @@ export default function LobbyPage() {
               </div>
             </button>
           </div>
-          <div className="mt-6 text-center text-sm text-white/30">
-            {t.dashboard.balance} <span className="text-gold-400 font-bold">{player.balance_usdc?.toFixed(2)} {t.usdc}</span>
-          </div>
         </div>
       </div>
     );
@@ -627,7 +468,7 @@ export default function LobbyPage() {
               <Zap className="w-8 h-8 text-gold-400" />
             </div>
             <h1 className="text-3xl font-bold mb-2">{t.lobby.quickMatch}</h1>
-            <p className="text-white/40">{t.lobby.selectStake}</p>
+            <p className="text-white/40">Select your stake — pay after match found</p>
           </div>
           {waiting ? (
             <div className="card text-center">
@@ -643,24 +484,23 @@ export default function LobbyPage() {
           ) : (
             <>
               <div className="card mb-4">
-                <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.selectStake}</h3>
+                <h3 className="text-sm font-medium text-white/50 mb-4">Select Stake (USDC)</h3>
                 <div className="grid grid-cols-5 gap-3">
                   {STAKE_OPTIONS.map((amount) => (
-                    <button key={amount} onClick={() => setSelectedStake(amount)} className={`stake-btn ${selectedStake === amount ? 'active' : ''} ${player.balance_usdc >= amount ? 'border-gold-400/20' : 'border-white/5'}`}>
+                    <button key={amount} onClick={() => setSelectedStake(amount)} className={`stake-btn ${selectedStake === amount ? 'active' : ''}`}>
                       <div className="text-lg font-bold">{amount}</div>
-                      <div className="text-xs text-white/40">{t.usdc}</div>
-                      {player.balance_usdc < amount && <div className="text-xs text-white/20 mt-1">↓</div>}
+                      <div className="text-xs text-white/40">USDC</div>
                     </button>
                   ))}
                 </div>
               </div>
               <div className="card mb-4">
-                <h3 className="text-sm font-medium text-white/50 mb-3">{t.lobby.playersWaiting}</h3>
+                <h3 className="text-sm font-medium text-white/50 mb-3">Players Waiting</h3>
                 <div className="grid grid-cols-5 gap-3">
                   {STAKE_OPTIONS.map((amount) => (
                     <div key={amount} className="text-center">
                       <div className="text-lg font-bold text-white/70">{queueStatus[amount] || 0}</div>
-                      <div className="text-xs text-white/30">{amount} {t.usdc}</div>
+                      <div className="text-xs text-white/30">{amount} USDC</div>
                     </div>
                   ))}
                 </div>
@@ -671,7 +511,7 @@ export default function LobbyPage() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />{challengeError}
                 </div>
               )}
-              {/* reCAPTCHA v2 Widget */}
+              {/* reCAPTCHA */}
               {!captchaVerified && (
                 <div className="card mb-4 text-center">
                   <div className="flex items-center justify-center gap-2 text-sm text-white/50 mb-3">
@@ -680,11 +520,8 @@ export default function LobbyPage() {
                   </div>
                   <div className="flex justify-center mb-3">
                     <div ref={recaptchaRef} id="recaptcha-container" />
-                    {!captchaReady && (
-                      <div className="text-xs text-white/30">Loading verification...</div>
-                    )}
+                    {!captchaReady && <div className="text-xs text-white/30">Loading verification...</div>}
                   </div>
-                  <div className="text-xs text-white/30">Complete the verification to start matchmaking</div>
                   {captchaError && (
                     <div className="mt-2 text-neon-red text-xs flex items-center justify-center gap-1">
                       <AlertCircle className="w-3 h-3" />{captchaError}
@@ -700,27 +537,10 @@ export default function LobbyPage() {
                   </span>
                 </div>
               )}
-              {player.balance_usdc < selectedStake ? (
-                <div className="space-y-3">
-                  <div className="bg-gold-400/5 border border-gold-400/10 rounded-xl p-4 text-center">
-                    <p className="text-sm text-white/50 mb-1">{t.lobby.lowBalance}</p>
-                    <p className="text-xs text-white/30">{t.lobby.depositToPlay}</p>
-                  </div>
-                  <button
-                    onClick={() => { if (!captchaVerified) return; setDepositAmount(selectedStake - Math.floor(player.balance_usdc)); setShowDeposit(true); }}
-                    disabled={!captchaVerified}
-                    className={`w-full text-center text-lg py-4 rounded-xl font-bold transition-all ${captchaVerified ? 'bg-gradient-to-r from-neon-green to-neon-blue text-white hover:scale-105' : 'bg-dark-700 text-white/30 cursor-not-allowed'}`}
-                  >
-                    💰 {t.lobby.deposit} {selectedStake - Math.floor(player.balance_usdc)} {t.usdc}
-                  </button>
-                  {!captchaVerified && <p className="text-xs text-white/30 text-center">Complete captcha to deposit</p>}
-                </div>
-              ) : (
-                <button onClick={joinMatchmaking} disabled={!captchaVerified} className="btn-neon w-full text-center text-lg py-4">
-                  <Swords className="w-5 h-5 inline mr-2" />{t.lobby.findMatch} — {selectedStake} {t.usdc}
-                </button>
-              )}
-              <p className="text-xs text-white/20 text-center mt-3">{t.payment.toConfirm}</p>
+              <button onClick={joinMatchmaking} disabled={!captchaVerified} className="btn-neon w-full text-center text-lg py-4">
+                <Swords className="w-5 h-5 inline mr-2" />Find Match — {selectedStake} USDC
+              </button>
+              <p className="text-xs text-white/20 text-center mt-3">You&apos;ll pay {selectedStake} USDC via Solana Pay after matching</p>
             </>
           )}
         </div>
@@ -762,28 +582,28 @@ export default function LobbyPage() {
                 {typeof window !== 'undefined' && `${window.location.origin}/play/${inviteCode}`}
               </div>
               <div className="mt-4 text-sm text-white/40">
-                {t.lobby.stake} <span className="text-gold-400 font-bold">{customStake || selectedStake} {t.usdc}</span>
+                Stake: <span className="text-gold-400 font-bold">{customStake || selectedStake} USDC</span>
               </div>
               <div className="mt-6 flex items-center justify-center gap-2 text-sm text-white/30">
-                <Clock className="w-4 h-4" />{t.lobby.waitingForOpponent}
+                <Clock className="w-4 h-4" />Waiting for opponent...
               </div>
             </div>
           ) : (
             <>
               <div className="card mb-4">
-                <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.setStake}</h3>
+                <h3 className="text-sm font-medium text-white/50 mb-4">Set Stake (USDC)</h3>
                 <div className="grid grid-cols-5 gap-3 mb-4">
                   {STAKE_OPTIONS.map((amount) => (
                     <button key={amount} onClick={() => { setSelectedStake(amount); setCustomStake(''); }} className={`stake-btn ${selectedStake === amount && !customStake ? 'active' : ''}`}>
                       <div className="text-lg font-bold">{amount}</div>
-                      <div className="text-xs text-white/40">{t.usdc}</div>
+                      <div className="text-xs text-white/40">USDC</div>
                     </button>
                   ))}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-white/40 text-sm">{t.lobby.orCustom}</span>
+                  <span className="text-white/40 text-sm">or custom:</span>
                   <input type="number" value={customStake} onChange={(e) => setCustomStake(e.target.value)} placeholder="Amount" className="input-dark flex-1 text-sm" min="0.01" step="0.01" />
-                  <span className="text-white/40 text-sm">{t.usdc}</span>
+                  <span className="text-white/40 text-sm">USDC</span>
                 </div>
               </div>
               {challengeError && (
@@ -791,17 +611,17 @@ export default function LobbyPage() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />{challengeError}
                 </div>
               )}
-              <button onClick={createChallenge} disabled={challengeLoading || player.balance_usdc < (customStake ? parseFloat(customStake) : selectedStake)} className="btn-primary w-full text-center mb-6 py-4 text-lg">
-                {challengeLoading ? <Loader2 className="w-5 h-5 inline animate-spin" /> : <><Link2 className="w-5 h-5 inline mr-2" /> {t.lobby.createChallenge}</>}
+              <button onClick={createChallenge} disabled={challengeLoading} className="btn-primary w-full text-center mb-6 py-4 text-lg">
+                {challengeLoading ? <Loader2 className="w-5 h-5 inline animate-spin" /> : <><Link2 className="w-5 h-5 inline mr-2" /> Create Challenge</>}
               </button>
               <div className="flex items-center gap-4 mb-6">
-                <div className="flex-1 h-px bg-white/10" /><span className="text-xs text-white/30">{t.or}</span><div className="flex-1 h-px bg-white/10" />
+                <div className="flex-1 h-px bg-white/10" /><span className="text-xs text-white/30">or</span><div className="flex-1 h-px bg-white/10" />
               </div>
               <div className="card">
-                <h3 className="text-sm font-medium text-white/50 mb-4">{t.lobby.joinFriendGame}</h3>
+                <h3 className="text-sm font-medium text-white/50 mb-4">Join Friend&apos;s Game</h3>
                 <div className="flex gap-2">
-                  <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder={t.lobby.enterCode} className="input-dark flex-1 text-center font-mono text-lg tracking-widest uppercase" maxLength={6} />
-                  <button onClick={joinChallenge} disabled={challengeLoading || !joinCode.trim()} className="btn-neon">{t.lobby.join}</button>
+                  <input type="text" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase())} placeholder="Enter code" className="input-dark flex-1 text-center font-mono text-lg tracking-widest uppercase" maxLength={6} />
+                  <button onClick={joinChallenge} disabled={challengeLoading || !joinCode.trim()} className="btn-neon">Join</button>
                 </div>
               </div>
             </>
