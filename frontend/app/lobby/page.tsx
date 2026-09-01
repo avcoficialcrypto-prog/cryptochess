@@ -16,7 +16,7 @@ import HypePhrases from '@/components/HypePhrases';
 import PaymentLockScreen from '@/components/PaymentLockScreen';
 import {
   Zap, Users, Copy, Check, Clock, ArrowLeft,
-  Swords, Link2, Loader2, AlertCircle, ShieldCheck,
+  Swords, Link2, Loader2, AlertCircle, ShieldCheck, DollarSign,
 } from 'lucide-react';
 
 const STAKE_OPTIONS = [1, 5, 10, 50, 100];
@@ -69,6 +69,12 @@ export default function LobbyPage() {
   const [paymentError, setPaymentError] = useState('');
   const [refundEligibleAt, setRefundEligibleAt] = useState<number | null>(null);
   const [refundCountdown, setRefundCountdown] = useState(0);
+
+  // Deposit state
+  const [showDeposit, setShowDeposit] = useState(false);
+  const [depositAmount, setDepositAmount] = useState(0);
+  const [depositing, setDepositing] = useState(false);
+  const [depositSuccess, setDepositSuccess] = useState(false);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -467,6 +473,80 @@ export default function LobbyPage() {
     );
   }
 
+  // ---- INLINE DEPOSIT MODAL ----
+  if (showDeposit) {
+    return (
+      <div className="min-h-screen bg-gradient-dark flex items-center justify-center px-4">
+        <div className="max-w-md w-full">
+          <button onClick={() => { setShowDeposit(false); setDepositSuccess(false); }} className="flex items-center gap-2 text-white/40 hover:text-white mb-8 transition-colors">
+            <ArrowLeft className="w-4 h-4" /><span className="text-sm">{t.back}</span>
+          </button>
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-neon-green/10 flex items-center justify-center mx-auto mb-4">
+              <DollarSign className="w-8 h-8 text-neon-green" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">{t.lobby.deposit} USDC</h1>
+            <p className="text-white/40 text-sm">{t.lobby.depositToPlay}</p>
+          </div>
+
+          {depositSuccess ? (
+            <div className="card text-center">
+              <div className="text-5xl mb-4">✅</div>
+              <h2 className="text-xl font-bold text-neon-green mb-2">{t.payment.matchConfirmed || 'Deposit Successful!'}</h2>
+              <p className="text-white/40 text-sm">+{depositAmount} USDC added to your balance</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-white/40 text-center">Select deposit amount:</p>
+              {[5, 10, 25, 50, 100].map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => setDepositAmount(amt)}
+                  className={`w-full p-4 rounded-xl border transition-all text-left flex items-center justify-between ${depositAmount === amt ? 'border-neon-green/40 bg-neon-green/10' : 'border-white/10 bg-dark-700 hover:border-white/20'}`}
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="text-2xl">💰</span>
+                    <span className="font-bold text-lg">{amt} USDC</span>
+                  </span>
+                  {depositAmount === amt && <Check className="w-5 h-5 text-neon-green" />}
+                </button>
+              ))}
+              <button
+                onClick={async () => {
+                  if (depositAmount <= 0) return;
+                  setDepositing(true);
+                  try {
+                    await api.deposit(depositAmount);
+                    setDepositSuccess(true);
+                    await refreshBalance();
+                    setTimeout(() => {
+                      setShowDeposit(false);
+                      setDepositSuccess(false);
+                    }, 2000);
+                  } catch (err: any) {
+                    console.error('Deposit failed:', err);
+                  } finally {
+                    setDepositing(false);
+                  }
+                }}
+                disabled={depositing || depositAmount <= 0}
+                className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${depositing ? 'bg-dark-700 text-white/30' : 'bg-gradient-to-r from-neon-green to-neon-blue text-white hover:scale-105'}`}
+              >
+                {depositing ? (
+                  <span className="flex items-center justify-center gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Processing...</span>
+                ) : (
+                  `💰 Deposit ${depositAmount} USDC`
+                )}
+              </button>
+            </div>
+          )}
+
+          <HypePhrases className="justify-center mt-6" />
+        </div>
+      </div>
+    );
+  }
+
   // Legacy pendingGame flow (for challenges)
   if (pendingGame && !PLATFORM_WALLET) {
     router.push(`/play/${pendingGame.gameId}?color=${pendingGame.color}&stake=${pendingGame.stake}`);
@@ -626,9 +706,14 @@ export default function LobbyPage() {
                     <p className="text-sm text-white/50 mb-1">{t.lobby.lowBalance}</p>
                     <p className="text-xs text-white/30">{t.lobby.depositToPlay}</p>
                   </div>
-                  <button onClick={() => router.push('/')} className="btn-primary w-full text-center text-lg py-4">
+                  <button
+                    onClick={() => { if (!captchaVerified) return; setDepositAmount(selectedStake - Math.floor(player.balance_usdc)); setShowDeposit(true); }}
+                    disabled={!captchaVerified}
+                    className={`w-full text-center text-lg py-4 rounded-xl font-bold transition-all ${captchaVerified ? 'bg-gradient-to-r from-neon-green to-neon-blue text-white hover:scale-105' : 'bg-dark-700 text-white/30 cursor-not-allowed'}`}
+                  >
                     💰 {t.lobby.deposit} {selectedStake - Math.floor(player.balance_usdc)} {t.usdc}
                   </button>
+                  {!captchaVerified && <p className="text-xs text-white/30 text-center">Complete captcha to deposit</p>}
                 </div>
               ) : (
                 <button onClick={joinMatchmaking} disabled={!captchaVerified} className="btn-neon w-full text-center text-lg py-4">
