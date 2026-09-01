@@ -1,5 +1,5 @@
 // ============================================================
-// CryptoChess - Game Routes (Wallet-Based)
+// CryptoChess - Game Routes (Wallet-Based, On-Chain Payments)
 // POST /api/games/challenge — Create friend challenge
 // GET  /api/games/challenge/:code — Get challenge info
 // GET  /api/games/history — Game history
@@ -9,6 +9,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { authenticateWallet } = require('../middleware/auth');
 const { query } = require('../db/connection');
+const escrow = require('../services/escrow');
 
 const router = express.Router();
 
@@ -18,6 +19,7 @@ router.use(authenticateWallet);
 /**
  * POST /api/games/challenge
  * Create a new challenge for a friend
+ * NO balance check — both players pay on-chain after match
  */
 router.post('/challenge', async (req, res) => {
   try {
@@ -28,42 +30,19 @@ router.post('/challenge', async (req, res) => {
       return res.status(400).json({ error: 'Invalid stake amount' });
     }
 
-    // Check balance
-    const balanceResult = query(
-      'SELECT balance_usdc FROM players WHERE wallet_address = $1',
-      [req.walletAddress]
-    );
-
-    if (balanceResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Player not found' });
-    }
-
-    if (parseFloat(balanceResult.rows[0].balance_usdc) < stake) {
-      return res.status(400).json({ error: 'Insufficient balance' });
-    }
+    // Ensure player record exists (no balance check)
+    await escrow.ensurePlayer(req.walletAddress);
 
     // Generate unique invite code (6 chars)
     const inviteCode = uuidv4().slice(0, 6).toUpperCase();
 
-    // Create game record
+    // Create game record — status is 'waiting' until opponent joins
+    // Both players will pay on-chain via Solana Pay after match
     const gameId = uuidv4();
     await query(
       `INSERT INTO games (id, white_wallet, stake_amount, status, invite_code)
        VALUES ($1, $2, $3, 'waiting', $4)`,
       [gameId, req.walletAddress, stake, inviteCode]
-    );
-
-    // Lock the creator's wager
-    await query(
-      `UPDATE players SET balance_usdc = balance_usdc - $1, updated_at = datetime('now')
-       WHERE wallet_address = $2`,
-      [stake, req.walletAddress]
-    );
-
-    await query(
-      `INSERT INTO transactions (wallet_address, type, amount_usdc, game_id, description)
-       VALUES ($1, 'wager_lock', $2, $3, $4)`,
-      [req.walletAddress, -stake, gameId, `Wager locked: ${stake} USDC`]
     );
 
     res.json({
@@ -84,9 +63,8 @@ router.post('/challenge', async (req, res) => {
 router.get('/challenge/:code', async (req, res) => {
   try {
     const result = await query(
-      `SELECT g.*, p.balance_usdc as creator_balance
+      `SELECT g.*
        FROM games g
-       LEFT JOIN players p ON g.white_wallet = p.wallet_address
        WHERE g.invite_code = $1`,
       [req.params.code.toUpperCase()]
     );
@@ -143,7 +121,6 @@ router.get('/history', async (req, res) => {
       [req.walletAddress, limit, offset]
     );
 
-    // Mask opponent wallets for privacy
     const games = result.rows.map(g => ({
       ...g,
       opponent: g.opponent_wallet

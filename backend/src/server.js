@@ -2,6 +2,7 @@
 // CryptoChess - Main Server (Wallet-Only, No Accounts)
 // Express + Socket.io + Chess.js
 // Identity = Solana wallet address
+// All payments are REAL on-chain USDC via Solana Pay
 // ============================================================
 
 require('dotenv').config();
@@ -79,7 +80,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'CryptoChess',
-    mode: 'wallet-only',
+    mode: 'wallet-only-onchain',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -133,7 +134,7 @@ const connectedUsers = new Map();
 /**
  * Helper: Start a game after both players have paid on-chain
  */
-async function startGame(gameId, payment, stakeAmount, io, activeGames, query) {
+async function startGame(gameId, payment, stakeAmount) {
   const chess = new Chess();
   activeGames.set(gameId, {
     chess,
@@ -175,7 +176,7 @@ async function startGame(gameId, payment, stakeAmount, io, activeGames, query) {
     blackPlayer: blackShort,
   });
 
-  console.log(`[WS] Both paid on-chain, game started: ${gameId} | ${stakeAmount} USDC`);
+  console.log(`[WS] ✅ Both paid on-chain, game started: ${gameId} | ${stakeAmount} USDC`);
 }
 
 // ============================================================
@@ -203,26 +204,15 @@ io.on('connection', (socket) => {
   console.log(`[WS] Connected: ${socket.walletAddress.slice(0, 8)}... (${socket.id})`);
   connectedUsers.set(socket.id, socket.walletAddress);
 
+  // Ensure player record exists
+  escrow.ensurePlayer(socket.walletAddress);
+
   // --------------------------------------------------------
   // JOIN MATCHMAKING QUEUE
   // --------------------------------------------------------
   socket.on('matchmaking:join', async (data) => {
     try {
       const { stakeAmount } = data;
-
-      // Ensure player exists (no balance check — they pay on-chain after match)
-      let result = await query(
-        'SELECT * FROM players WHERE wallet_address = $1',
-        [socket.walletAddress]
-      );
-
-      if (result.rows.length === 0) {
-        // Auto-create player record
-        await query(
-          'INSERT OR IGNORE INTO players (wallet_address, balance_usdc) VALUES ($1, 0)',
-          [socket.walletAddress]
-        );
-      }
 
       const matchResult = await matchmaking.joinQueue(
         socket.walletAddress,
@@ -234,8 +224,8 @@ io.on('connection', (socket) => {
         const gameId = matchResult.gameId;
         const opponent = matchResult.opponent;
 
-        // DON'T lock wagers yet — start payment phase (60s timer)
-        const paymentData = paymentPhase.startPaymentPhase(
+        // Start payment phase (60s timer) — NO fake balance deduction
+        paymentPhase.startPaymentPhase(
           gameId,
           socket.walletAddress,
           opponent.walletAddress,
@@ -254,7 +244,7 @@ io.on('connection', (socket) => {
         const oppSocket = io.sockets.sockets.get(opponent.socketId);
         if (oppSocket) oppSocket.join(`game:${gameId}`);
 
-        // Notify opponent (black) — payment required
+        // Notify opponent — payment required
         io.to(opponent.socketId).emit('payment:required', {
           gameId,
           color: 'black',
@@ -263,7 +253,7 @@ io.on('connection', (socket) => {
           timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
         });
 
-        // Notify this player (white) — payment required
+        // Notify this player — payment required
         socket.emit('payment:required', {
           gameId,
           color: 'white',
@@ -283,13 +273,9 @@ io.on('connection', (socket) => {
   });
 
   // --------------------------------------------------------
-  // CONFIRM PAYMENT (after match found)
-  // --------------------------------------------------------
-  // --------------------------------------------------------
   // CONFIRM PAYMENT — Player sends real USDC on-chain
-  // The frontend generates Solana Pay QR for the platform wallet.
-  // Backend monitors the platform wallet for incoming USDC.
-  // game:pay = player confirms they have sent the tx
+  // The frontend shows Solana Pay QR → user scans → real USDC transfer
+  // Backend monitors the platform wallet for incoming USDC
   // --------------------------------------------------------
   socket.on('game:pay', async (data) => {
     try {
@@ -303,18 +289,26 @@ io.on('connection', (socket) => {
       const stakeAmount = payment.stakeAmount;
 
       // Start monitoring the platform wallet for this player's payment
-      // This will poll Solana RPC and detect the USDC transfer
       solanaMonitor.startMonitoring(
         gameId,
         socket.walletAddress,
         stakeAmount,
         // onConfirmed — real payment detected on-chain!
         async (paymentData) => {
-          console.log(`[WS] On-chain payment confirmed for ${socket.walletAddress.slice(0, 8)} in game ${gameId.slice(0, 8)}`);
+          console.log(`[WS] ✅ On-chain payment confirmed for ${socket.walletAddress.slice(0, 8)} in game ${gameId.slice(0, 8)}`);
 
           // Mark as paid in payment phase
           const result = paymentPhase.markPaid(gameId, socket.walletAddress);
           if (result.error) return;
+
+          // Record payment for audit
+          await escrow.recordPayment(
+            socket.walletAddress,
+            stakeAmount,
+            gameId,
+            paymentData.signature,
+            `On-chain USDC payment: ${paymentData.signature}`
+          );
 
           // Notify both players
           io.to(`game:${gameId}`).emit('payment:status', {
@@ -324,16 +318,16 @@ io.on('connection', (socket) => {
           });
 
           if (result.bothPaid) {
-            // Both paid — initialize chess game and start!
-            await startGame(gameId, payment, stakeAmount, io, activeGames, query);
+            // Both paid — start the game!
+            await startGame(gameId, result, stakeAmount);
           } else {
             socket.emit('payment:waiting', { waitingFor: result.waitingFor });
           }
         },
         // onTimeout — 90s passed, no payment detected
         ({ gameId: gid, wallet }) => {
-          console.log(`[WS] Payment monitoring timed out for ${wallet.slice(0, 8)} in ${gid.slice(0, 8)}`);
-          socket.emit('payment:error', { error: 'Payment not detected on-chain. Make sure you sent the correct USDC amount.' });
+          console.log(`[WS] ⚠ Payment monitoring timed out for ${wallet.slice(0, 8)} in ${gid.slice(0, 8)}`);
+          socket.emit('payment:error', { error: 'Payment not detected on-chain. Make sure you sent the correct USDC amount to the platform wallet.' });
         }
       );
 
@@ -345,16 +339,49 @@ io.on('connection', (socket) => {
   });
 
   // --------------------------------------------------------
-  // REQUEST REFUND
+  // REQUEST REFUND — Real on-chain USDC refund
   // --------------------------------------------------------
   socket.on('game:refund', async (data) => {
     try {
       const { gameId } = data;
-      const result = await paymentPhase.refundPlayer(socket.walletAddress, gameId);
-      if (result.success) {
-        socket.emit('payment:refunded', { amount: result.amount });
+      const eligibility = paymentPhase.consumeRefundEligibility(socket.walletAddress, gameId);
+
+      if (!eligibility) {
+        socket.emit('payment:error', { error: 'Not eligible for refund' });
+        return;
+      }
+
+      // Send real USDC back on-chain
+      const refundResult = await solanaPayout.sendRefund(
+        socket.walletAddress,
+        eligibility.stakeAmount,
+        gameId
+      );
+
+      if (refundResult.success) {
+        await escrow.recordRefund(
+          socket.walletAddress,
+          eligibility.stakeAmount,
+          gameId,
+          'Refund — opponent did not pay'
+        );
+
+        // Mark game as cancelled
+        await query(
+          `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
+          [gameId]
+        );
+        saveDB();
+
+        socket.emit('payment:refunded', {
+          amount: eligibility.stakeAmount,
+          signature: refundResult.signature,
+          onChain: true,
+        });
+
+        console.log(`[REFUND] ✅ Real USDC refund: ${eligibility.stakeAmount} → ${socket.walletAddress.slice(0, 8)}`);
       } else {
-        socket.emit('payment:error', { error: result.error });
+        socket.emit('payment:error', { error: 'Refund transaction failed on-chain. Try again.' });
       }
     } catch (err) {
       console.error('[WS] Refund error:', err.message);
@@ -395,77 +422,48 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Check opponent balance
-      const balance = await query(
-        'SELECT balance_usdc FROM players WHERE wallet_address = $1',
-        [socket.walletAddress]
-      );
+      // Start payment phase for challenge — both must pay on-chain
+      const stakeAmount = parseFloat(game.stake_amount);
 
-      if (balance.rows.length === 0 || parseFloat(balance.rows[0].balance_usdc) < parseFloat(game.stake_amount)) {
-        socket.emit('challenge:error', { error: 'Insufficient balance' });
-        return;
-      }
+      paymentPhase.startPaymentPhase(
+        game.id,
+        game.white_wallet,
+        socket.walletAddress,
+        stakeAmount
+      );
 
       // Update game
       await query(
-        `UPDATE games SET black_wallet = $1, status = 'active' WHERE id = $2`,
+        `UPDATE games SET black_wallet = $1, status = 'payment_pending' WHERE id = $2`,
         [socket.walletAddress, game.id]
       );
-
-      // Lock only the JOINER's wager (creator already paid when creating challenge)
-      const stakeAmount = parseFloat(game.stake_amount);
-      await escrow.lockChallengeJoiner(socket.walletAddress, stakeAmount, game.id);
-
-      // Initialize chess game
-      const chess = new Chess();
 
       // Find creator's socket
       const creatorSocketId = [...io.sockets.sockets.entries()]
         .find(([id, s]) => s.walletAddress === game.white_wallet)?.[0];
 
-      activeGames.set(game.id, {
-        chess,
-        white: { wallet: game.white_wallet, socketId: creatorSocketId },
-        black: { wallet: socket.walletAddress, socketId: socket.id },
-        stake: stakeAmount,
-        moveHistory: [],
-        startTime: Date.now()
-      });
-
       socket.join(`game:${game.id}`);
 
-      const whiteShort = game.white_wallet.slice(0, 6) + '...' + game.white_wallet.slice(-4);
-      const blackShort = socket.walletAddress.slice(0, 6) + '...' + socket.walletAddress.slice(-4);
-
-      // Notify creator
+      // Notify both players — payment required
       if (creatorSocketId) {
-        io.to(creatorSocketId).emit('game:started', {
+        io.to(creatorSocketId).emit('payment:required', {
           gameId: game.id,
           color: 'white',
           stake: stakeAmount,
-          opponent: { wallet: socket.walletAddress }
+          opponent: { wallet: socket.walletAddress },
+          timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
         });
       }
 
-      // Notify joiner
-      socket.emit('game:started', {
+      socket.emit('payment:required', {
         gameId: game.id,
         color: 'black',
         stake: stakeAmount,
-        opponent: { wallet: game.white_wallet }
+        opponent: { wallet: game.white_wallet },
+        timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
       });
 
-      // Send initial board state
-      io.to(`game:${game.id}`).emit('game:state', {
-        fen: chess.fen(),
-        turn: chess.turn(),
-        moveNumber: chess.moveNumber(),
-        whitePlayer: whiteShort,
-        blackPlayer: blackShort,
-        status: 'active'
-      });
-
-      console.log(`[WS] Challenge started: ${game.id} | ${stakeAmount} USDC`);
+      console.log(`[WS] Challenge started, payment phase: ${game.id} | ${stakeAmount} USDC`);
     } catch (err) {
       console.error('[WS] Challenge join error:', err.message);
       socket.emit('challenge:error', { error: err.message });
@@ -549,11 +547,17 @@ io.on('connection', (socket) => {
         gameState.winnerWallet = winnerWallet;
         gameState.resultMessage = resultMessage;
 
-        // Settle financially — real USDC payout from platform wallet
+        // REAL USDC payout from platform wallet to winner
         if (isCheckmate) {
-          await solanaPayout.settleAndPayout(gameId, winnerWallet);
+          const payoutResult = await solanaPayout.settleAndPayout(gameId, winnerWallet);
+          gameState.payoutResult = {
+            success: payoutResult.success,
+            payout: payoutResult.payout,
+            signature: payoutResult.signature,
+          };
         } else {
-          await solanaPayout.settleAndPayout(gameId, null); // draw
+          // Draw or stalemate — record commission, no winner payout
+          await solanaPayout.settleAndPayout(gameId, null);
         }
 
         activeGames.delete(gameId);
@@ -584,7 +588,8 @@ io.on('connection', (socket) => {
       const winnerWallet = gameData.white.wallet === socket.walletAddress
         ? gameData.black.wallet : gameData.white.wallet;
 
-      await solanaPayout.settleAndPayout(gameId, winnerWallet);
+      // REAL USDC payout to winner
+      const payoutResult = await solanaPayout.settleAndPayout(gameId, winnerWallet);
 
       io.to(`game:${gameId}`).emit('game:state', {
         fen: gameData.chess.fen(),
@@ -592,7 +597,12 @@ io.on('connection', (socket) => {
         winnerWallet,
         winnerUsername: winnerWallet.slice(0, 6) + '...' + winnerWallet.slice(-4),
         resultMessage: 'Resigned',
-        isCheck: false
+        isCheck: false,
+        payoutResult: {
+          success: payoutResult.success,
+          payout: payoutResult.payout,
+          signature: payoutResult.signature,
+        },
       });
 
       activeGames.delete(gameId);
@@ -638,7 +648,7 @@ io.on('connection', (socket) => {
   });
 
   // --------------------------------------------------------
-  // JOIN EXISTING GAME (for reconnection / game page load)
+  // JOIN EXISTING GAME (reconnection)
   // --------------------------------------------------------
   socket.on('game:join', (data) => {
     const { gameId } = data;
@@ -648,7 +658,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Update socket ID for this player
     if (gameData.white.wallet === socket.walletAddress) {
       gameData.white.socketId = socket.id;
     } else if (gameData.black.wallet === socket.walletAddress) {
@@ -660,7 +669,6 @@ io.on('connection', (socket) => {
 
     socket.join(`game:${gameId}`);
 
-    // Send current state
     socket.emit('game:state', {
       fen: gameData.chess.fen(),
       turn: gameData.chess.turn(),
@@ -685,20 +693,19 @@ io.on('connection', (socket) => {
       if (payment.white === socket.walletAddress || payment.black === socket.walletAddress) {
         const cancelResult = paymentPhase.cancelPayment(gameId, socket.walletAddress);
         if (cancelResult && cancelResult.action === 'requeue') {
-          // The other player paid — requeue them
+          // The other player paid on-chain — requeue them
           const oppSocketId = [...io.sockets.sockets.entries()]
             .find(([id, s]) => s.walletAddress === cancelResult.paidWallet)?.[0];
           if (oppSocketId) {
             io.to(oppSocketId).emit('payment:opponent_left', {
               gameId,
               stakeAmount: cancelResult.stakeAmount,
-              message: 'Your opponent did not pay. Matching you with a new rival...',
+              message: 'Your opponent did not pay. Searching for a new rival...',
             });
             // Re-queue the paid player
             matchmaking.joinQueue(cancelResult.paidWallet, cancelResult.stakeAmount, oppSocketId)
               .then(async (reMatch) => {
                 if (reMatch.status === 'matched') {
-                  // Got a new match immediately — start payment phase
                   const newPayment = paymentPhase.startPaymentPhase(
                     reMatch.gameId,
                     cancelResult.paidWallet,
@@ -729,25 +736,30 @@ io.on('connection', (socket) => {
               }).catch(err => console.error('[WS] Re-queue error:', err.message));
           }
         }
-        // If action is 'cancel' — nothing to do, both players weren't paid
       }
     }
 
-    // Handle active games — opponent wins by disconnect
+    // Handle active games — opponent wins by disconnect with REAL payout
     for (const [gameId, gameData] of activeGames) {
       if (gameData.white.wallet === socket.walletAddress || gameData.black.wallet === socket.walletAddress) {
         const winnerWallet = gameData.white.wallet === socket.walletAddress
           ? gameData.black.wallet : gameData.white.wallet;
 
         try {
-          await escrow.settleGame(gameId, winnerWallet);
+          // REAL USDC payout to winner
+          const payoutResult = await solanaPayout.settleAndPayout(gameId, winnerWallet);
 
           io.to(`game:${gameId}`).emit('game:state', {
             fen: gameData.chess.fen(),
             status: 'disconnected',
             winnerWallet,
             resultMessage: 'Opponent disconnected',
-            isCheck: false
+            isCheck: false,
+            payoutResult: {
+              success: payoutResult.success,
+              payout: payoutResult.payout,
+              signature: payoutResult.signature,
+            },
           });
         } catch (err) {
           console.error(`[WS] Disconnect settlement error:`, err.message);
@@ -768,12 +780,13 @@ const PORT = process.env.PORT || 3001;
 initDB().then(() => {
 server.listen(PORT, () => {
   console.log(`\n  ╔══════════════════════════════════════════╗`);
-  console.log(`  ║       ♚ CryptoChess (Wallet-Only) ♚     ║`);
+  console.log(`  ║       ♚ CryptoChess (On-Chain) ♚        ║`);
   console.log(`  ║──────────────────────────────────────────║`);
   console.log(`  ║  HTTP:    http://localhost:${PORT}          ║`);
   console.log(`  ║  WS:      ws://localhost:${PORT}            ║`);
   console.log(`  ║  Health:  http://localhost:${PORT}/ping      ║`);
-  console.log(`  ║  Mode:    No accounts — wallet only     ║`);
+  console.log(`  ║  Mode:    Real USDC — No fake balances   ║`);
+  console.log(`  ║  Payout:  Solana mainnet                 ║`);
   console.log(`  ╚══════════════════════════════════════════╝\n`);
 
   changenow.startSweepMonitor();

@@ -1,52 +1,105 @@
 // ============================================================
-// CryptoChess - Refund Route
-// POST /api/refund — Refund a player who paid but rival didn't
+// CryptoChess - Refund Route (Real On-Chain)
+// Refunds USDC back to player's wallet via Solana transaction
 // ============================================================
 
 const express = require('express');
-const router = express.Router();
-const { authenticateWallet } = require('../middleware/auth');
+const solanaPayout = require('../services/solana-payout');
 const paymentPhase = require('../services/payment-phase');
+const escrow = require('../services/escrow');
 
-router.use(authenticateWallet);
+const router = express.Router();
 
 /**
  * POST /api/refund
- * Body: { gameId }
- * Refunds the player if eligible (paid but opponent didn't, no new match found)
+ * Process a real USDC refund on-chain
+ * Body: { walletAddress, gameId }
  */
 router.post('/', async (req, res) => {
   try {
-    const { gameId } = req.body;
+    const { walletAddress, gameId } = req.body;
 
-    if (!gameId) {
-      return res.status(400).json({ error: 'gameId required' });
+    if (!walletAddress || !gameId) {
+      return res.status(400).json({ error: 'walletAddress and gameId required' });
     }
 
-    // Check eligibility
-    if (!paymentPhase.isRefundEligible(req.walletAddress, gameId)) {
-      return res.status(403).json({ error: 'Not eligible for refund yet' });
+    // Check if player is eligible for refund
+    if (!paymentPhase.isRefundEligible(walletAddress, gameId)) {
+      return res.status(400).json({ error: 'Not eligible for refund or expired' });
     }
 
-    const result = await paymentPhase.refundPlayer(req.walletAddress, gameId);
-    if (result.success) {
-      res.json({ success: true, amount: result.amount });
+    // Consume the eligibility
+    const eligibility = paymentPhase.consumeRefundEligibility(walletAddress, gameId);
+    if (!eligibility) {
+      return res.status(400).json({ error: 'Refund eligibility expired' });
+    }
+
+    // Send real USDC refund on-chain
+    const refundResult = await solanaPayout.sendPayout(
+      walletAddress,
+      eligibility.stakeAmount,
+      gameId
+    );
+
+    if (refundResult.success) {
+      // Record for audit
+      await escrow.recordRefund(
+        walletAddress,
+        eligibility.stakeAmount,
+        gameId,
+        'Refund — opponent did not pay'
+      );
+
+      // Mark game as cancelled
+      const { query, saveDB } = require('../db/connection');
+      await query(
+        `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
+        [gameId]
+      );
+      saveDB();
+
+      console.log(`[REFUND] ✅ Real USDC refund: ${eligibility.stakeAmount} → ${walletAddress.slice(0, 8)} | Sig: ${refundResult.signature?.slice(0, 16)}`);
+
+      return res.json({
+        success: true,
+        amount: eligibility.stakeAmount,
+        signature: refundResult.signature,
+        onChain: true,
+      });
     } else {
-      res.status(400).json({ error: result.error });
+      return res.status(500).json({
+        error: 'Refund transaction failed on-chain',
+        details: refundResult.error,
+      });
     }
   } catch (err) {
-    console.error('[REFUND] Route error:', err.message);
-    res.status(500).json({ error: 'Refund failed' });
+    console.error('[REFUND] Error:', err.message);
+    return res.status(500).json({ error: 'Refund failed' });
   }
 });
 
 /**
- * GET /api/refund/check/:gameId
- * Check if a player is eligible for refund on a specific game
+ * GET /api/refund/check/:gameId?wallet=...
+ * Check if a player is eligible for refund
  */
 router.get('/check/:gameId', (req, res) => {
-  const eligible = paymentPhase.isRefundEligible(req.walletAddress, req.params.gameId);
-  res.json({ eligible });
+  const { gameId } = req.params;
+  const wallet = req.query.wallet;
+
+  if (!wallet) {
+    return res.status(400).json({ error: 'wallet query param required' });
+  }
+
+  const eligible = paymentPhase.isRefundEligible(wallet, gameId);
+  const eligibility = paymentPhase.refundEligible.get(wallet);
+
+  return res.json({
+    eligible,
+    gameId,
+    wallet: wallet.slice(0, 8) + '...',
+    stakeAmount: eligibility?.stakeAmount || 0,
+    expiresAt: eligibility?.expiresAt || null,
+  });
 });
 
 module.exports = router;

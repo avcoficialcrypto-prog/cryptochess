@@ -1,6 +1,7 @@
 -- ============================================================
--- CryptoChess - SQLite Schema (Wallet-Only)
+-- CryptoChess - SQLite Schema (On-Chain Only)
 -- Identity = Solana wallet address
+-- All money lives on Solana blockchain — this is just audit trail
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS players (
@@ -16,23 +17,27 @@ CREATE TABLE IF NOT EXISTS players (
 
 CREATE TABLE IF NOT EXISTS games (
   id TEXT PRIMARY KEY,
-  white_wallet TEXT REFERENCES players(wallet_address),
-  black_wallet TEXT REFERENCES players(wallet_address),
+  white_wallet TEXT,
+  black_wallet TEXT,
   stake_amount REAL NOT NULL,
   status TEXT DEFAULT 'waiting',
   winner_wallet TEXT,
   invite_code TEXT UNIQUE,
   move_history TEXT DEFAULT '[]',
+  payout_signature TEXT,
+  payout_amount REAL,
+  commission_amount REAL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  wallet_address TEXT REFERENCES players(wallet_address),
+  wallet_address TEXT,
   type TEXT NOT NULL,
   amount_usdc REAL NOT NULL,
   game_id TEXT,
+  signature TEXT,
   description TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -56,7 +61,7 @@ CREATE TABLE IF NOT EXISTS sweep_orders (
 
 CREATE TABLE IF NOT EXISTS matchmaking_queue (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  wallet_address TEXT REFERENCES players(wallet_address),
+  wallet_address TEXT,
   stake_amount REAL NOT NULL,
   socket_id TEXT,
   joined_at TEXT DEFAULT (datetime('now'))
@@ -80,3 +85,5 @@ CREATE INDEX IF NOT EXISTS idx_transactions_wallet ON transactions(wallet_addres
 CREATE INDEX IF NOT EXISTS idx_matchmaking_stake ON matchmaking_queue(stake_amount);
 CREATE INDEX IF NOT EXISTS idx_games_white ON games(white_wallet);
 CREATE INDEX IF NOT EXISTS idx_games_black ON games(black_wallet);
+CREATE INDEX IF NOT EXISTS idx_transactions_game ON transactions(game_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);

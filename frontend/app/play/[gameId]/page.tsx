@@ -292,9 +292,8 @@ export default function GamePage() {
 
             <div className="card">
               <div className="text-sm text-white/40 mb-2">{t.game.prizePool}</div>
-              <div className="text-2xl font-bold text-gold-400">{(stakeAmount * 2).toFixed(0)} {t.usdc}</div>
-              <div className="text-xs text-white/30 mt-1">
-                Winner: {((stakeAmount * 2) * 0.97).toFixed(2)} ({t.game.fee})
+              <div className="text-2xl font-bold text-gold-400">{(stakeAmount * 2).toFixed(0)} {t.usdc}</div>                <div className="text-xs text-white/30 mt-1">
+                Winner: {((stakeAmount * 2) * 0.95).toFixed(2)} (5% fee)
               </div>
             </div>
 
@@ -361,12 +360,12 @@ export default function GamePage() {
                 {!gameResult.isDraw && (
                   <div className="text-xs text-white/30 mt-1">
                     {gameResult.winnerWallet === walletAddress
-                      ? `+${(stakeAmount * 2 * 0.97).toFixed(2)} ${t.gameOver.earned}`
+                      ? `+${(stakeAmount * 2 * 0.95).toFixed(2)} USDC sent to your wallet`
                       : `-${stakeAmount} ${t.gameOver.lost}`}
                   </div>
                 )}
               </div>
-              <button onClick={() => router.push('/')} className="btn-primary w-full text-center">
+              <button onClick={() => router.push('/lobby')} className="btn-primary w-full text-center">
                 {t.gameOver.backToLobby}
               </button>
             </div>

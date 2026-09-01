@@ -1,11 +1,11 @@
 // ============================================================
-// CryptoChess - Pending Payment Manager
+// CryptoChess - Payment Phase Manager
 // Tracks matches in payment phase (60s timer per player)
+// NO fake balances — refund = real USDC sent back on-chain
 // ============================================================
 
-const { v4: uuidv4 } = require('uuid');
-const { query, saveDB } = require('../db/connection');
-const COMMISSION_RATE = 0.03;
+const PAYMENT_TIMEOUT_MS = 60 * 1000; // 60 seconds to pay
+const REMATCH_TIMEOUT_MS = 60 * 1000; // 60 seconds to find new match before refund eligible
 
 // Pending payments: gameId -> { white, black, stakeAmount, whitePaid, blackPaid, createdAt, timer }
 const pendingPayments = new Map();
@@ -13,12 +13,8 @@ const pendingPayments = new Map();
 // Refund-eligible players: walletAddress -> { gameId, stakeAmount, expiresAt }
 const refundEligible = new Map();
 
-const PAYMENT_TIMEOUT_MS = 60 * 1000; // 60 seconds
-const REMATCH_TIMEOUT_MS = 60 * 1000; // 60 seconds to find new match before refund eligible
-
 /**
  * Start payment phase for a matched game
- * Returns { gameId, white, black, stakeAmount }
  */
 function startPaymentPhase(gameId, whiteWallet, blackWallet, stakeAmount) {
   const paymentData = {
@@ -34,7 +30,7 @@ function startPaymentPhase(gameId, whiteWallet, blackWallet, stakeAmount) {
 
   pendingPayments.set(gameId, paymentData);
 
-  // Set timeout — if not both paid in 60s, handle expiry
+  // Timeout — if not both paid in 60s, handle expiry
   paymentData.timer = setTimeout(() => {
     handlePaymentExpiry(gameId);
   }, PAYMENT_TIMEOUT_MS);
@@ -44,8 +40,7 @@ function startPaymentPhase(gameId, whiteWallet, blackWallet, stakeAmount) {
 }
 
 /**
- * Mark a player as paid
- * Returns { bothPaid, gameState }
+ * Mark a player as paid (on-chain payment detected)
  */
 function markPaid(gameId, walletAddress) {
   const payment = pendingPayments.get(gameId);
@@ -62,7 +57,7 @@ function markPaid(gameId, walletAddress) {
   console.log(`[PAYMENT] ${walletAddress.slice(0, 8)} paid for ${gameId} | White: ${payment.whitePaid} | Black: ${payment.blackPaid}`);
 
   if (payment.whitePaid && payment.blackPaid) {
-    // Both paid — cancel timer and return game start data
+    // Both paid — cancel timer
     if (payment.timer) clearTimeout(payment.timer);
     pendingPayments.delete(gameId);
     return { bothPaid: true, gameId, stakeAmount: payment.stakeAmount, white: payment.white, black: payment.black };
@@ -73,7 +68,6 @@ function markPaid(gameId, walletAddress) {
 
 /**
  * Handle payment expiry (60s timeout)
- * Called by timer — one or both players didn't pay
  */
 function handlePaymentExpiry(gameId) {
   const payment = pendingPayments.get(gameId);
@@ -81,28 +75,23 @@ function handlePaymentExpiry(gameId) {
 
   const { white, black, whitePaid, blackPaid, stakeAmount } = payment;
 
-  // Cancel timer
   if (payment.timer) clearTimeout(payment.timer);
   pendingPayments.delete(gameId);
 
   if (whitePaid && !blackPaid) {
-    // White paid, black didn't — white goes back to queue, black is refunded/banned from queue briefly
     console.log(`[PAYMENT] Expired: ${gameId} | White paid, Black didn't | Re-queuing white`);
     return { action: 'requeue', paidWallet: white, unpaidWallet: black, stakeAmount, gameId };
   } else if (!whitePaid && blackPaid) {
-    // Black paid, white didn't — black goes back to queue
     console.log(`[PAYMENT] Expired: ${gameId} | Black paid, White didn't | Re-queuing black`);
     return { action: 'requeue', paidWallet: black, unpaidWallet: white, stakeAmount, gameId };
   } else {
-    // Neither paid — cancel match, both go back
-    console.log(`[PAYMENT] Expired: ${gameId} | Neither paid | Both returned to queue`);
+    console.log(`[PAYMENT] Expired: ${gameId} | Neither paid | Cancelled`);
     return { action: 'cancel', stakeAmount, gameId };
   }
 }
 
 /**
  * Cancel a pending payment (player left/disconnected)
- * Returns info about what to do with the remaining player
  */
 function cancelPayment(gameId, walletAddress) {
   const payment = pendingPayments.get(gameId);
@@ -126,69 +115,18 @@ function cancelPayment(gameId, walletAddress) {
 
   pendingPayments.delete(gameId);
 
-  if (paidWallet && !isWhite && !isBlack) {
-    // The other player paid — requeue them
+  if (paidWallet) {
+    // The other player paid on-chain — requeue them (they already sent real USDC)
     return { action: 'requeue', paidWallet, unpaidWallet, stakeAmount: payment.stakeAmount, gameId };
   } else if (payment.whitePaid && payment.blackPaid) {
-    // Both paid — shouldn't happen if game already started
-    return null;
+    return null; // Both paid — game should already be starting
   } else {
-    // Nobody paid or only the leaver paid — just cancel
     return { action: 'cancel', stakeAmount: payment.stakeAmount, gameId };
   }
 }
 
 /**
- * Refund a player who paid but didn't get a new match
- */
-async function refundPlayer(walletAddress, gameId) {
-  const eligibility = refundEligible.get(walletAddress);
-  if (!eligibility) return { error: 'Not eligible for refund' };
-
-  if (eligibility.gameId !== gameId) return { error: 'Wrong game ID' };
-
-  try {
-    query('BEGIN');
-
-    // Refund the player
-    const result = query(
-      `UPDATE players SET balance_usdc = balance_usdc + $1, updated_at = datetime('now')
-       WHERE wallet_address = $2`,
-      [eligibility.stakeAmount, walletAddress]
-    );
-    if (result.rowCount === 0) {
-      query('ROLLBACK');
-      return { error: 'Player not found' };
-    }
-
-    // Log refund transaction
-    query(
-      `INSERT INTO transactions (wallet_address, type, amount_usdc, game_id, description)
-       VALUES ($1, 'refund', $2, $3, 'Match refund — opponent did not pay')`,
-      [walletAddress, eligibility.stakeAmount, gameId]
-    );
-
-    // Mark game as cancelled
-    query(
-      `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
-      [gameId]
-    );
-
-    query('COMMIT');
-    saveDB();
-
-    refundEligible.delete(walletAddress);
-    console.log(`[REFUND] ${walletAddress.slice(0, 8)} refunded ${eligibility.stakeAmount} USDC for ${gameId}`);
-    return { success: true, amount: eligibility.stakeAmount };
-  } catch (err) {
-    try { query('ROLLBACK'); } catch {}
-    console.error('[REFUND] Error:', err.message);
-    return { error: 'Refund failed' };
-  }
-}
-
-/**
- * Make a player eligible for refund (called after rematch timeout)
+ * Make a player eligible for refund (after rematch timeout)
  */
 function makeRefundEligible(walletAddress, gameId, stakeAmount) {
   refundEligible.set(walletAddress, {
@@ -197,7 +135,7 @@ function makeRefundEligible(walletAddress, gameId, stakeAmount) {
     expiresAt: Date.now() + REMATCH_TIMEOUT_MS,
   });
 
-  // Auto-expire refund eligibility after REMATCH_TIMEOUT_MS
+  // Auto-expire
   setTimeout(() => {
     const current = refundEligible.get(walletAddress);
     if (current && current.gameId === gameId) {
@@ -224,6 +162,16 @@ function isRefundEligible(walletAddress, gameId) {
 }
 
 /**
+ * Consume refund eligibility (called when refund is processed on-chain)
+ */
+function consumeRefundEligibility(walletAddress, gameId) {
+  const eligibility = refundEligible.get(walletAddress);
+  if (!eligibility || eligibility.gameId !== gameId) return null;
+  refundEligible.delete(walletAddress);
+  return eligibility;
+}
+
+/**
  * Get pending payment info
  */
 function getPendingPayment(gameId) {
@@ -235,9 +183,9 @@ module.exports = {
   markPaid,
   handlePaymentExpiry,
   cancelPayment,
-  refundPlayer,
   makeRefundEligible,
   isRefundEligible,
+  consumeRefundEligibility,
   getPendingPayment,
   pendingPayments,
   refundEligible,
