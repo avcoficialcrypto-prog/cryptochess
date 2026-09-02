@@ -90,12 +90,11 @@ function cleanupPlayer(walletAddress) {
  * Create a game record for matched players
  */
 async function createMatchedGame(whiteWallet, blackWallet, stakeAmount) {
-  const gameId = uuidv4();
-  await query(
-    `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
-     VALUES ($1, $2, $3, $4, 'active')`,
-    [gameId, whiteWallet, blackWallet, stakeAmount]
-  );
+  const gameId = uuidv4();    await query(
+      `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
+       VALUES ($1, $2, $3, $4, 'payment_pending')`,
+      [gameId, whiteWallet, blackWallet, stakeAmount]
+    );
   return gameId;
 }
 

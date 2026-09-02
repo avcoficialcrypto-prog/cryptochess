@@ -31,7 +31,7 @@ const paymentPhase = require('./services/payment-phase');
 const changenow = require('./services/changenow');
 const solanaMonitor = require('./services/solana-monitor');
 const solanaPayout = require('./services/solana-payout');
-const { query, initDB } = require('./db/connection');
+const { query, initDB, saveDB } = require('./db/connection');
 
 // Track which games each player is in (wallet -> Set<gameId>)
 const playerGames = new Map();
@@ -151,11 +151,10 @@ async function startGame(gameId, payment, stakeAmount) {
     if (s.walletAddress === payment.black) activeGames.get(gameId).black.socketId = sid;
   }
 
-  // Update game status
-  await query(
-    `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
-    [gameId]
-  );
+  // Update game status        await query(
+          `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
+          [gameId]
+        ).catch(e => console.error('[WS] Game status update error:', e.message));
 
   const whiteShort = payment.white.slice(0, 6) + '...' + payment.white.slice(-4);
   const blackShort = payment.black.slice(0, 6) + '...' + payment.black.slice(-4);
@@ -560,13 +559,14 @@ io.on('connection', (socket) => {
           await solanaPayout.settleAndPayout(gameId, null);
         }
 
-        activeGames.delete(gameId);
-
+        // Save game record (settleAndPayout already updated status to 'completed')
         await query(
-          `UPDATE games SET move_history = $1, winner_wallet = $2, status = $3, updated_at = datetime('now')
-           WHERE id = $4`,
-          [JSON.stringify(gameData.moveHistory.map(m => m.san)), winnerWallet, gameState.status, gameId]
+          `UPDATE games SET move_history = $1, updated_at = datetime('now')
+           WHERE id = $2`,
+          [JSON.stringify(gameData.moveHistory.map(m => m.san)), gameId]
         ).catch(() => {});
+        saveDB();
+        activeGames.delete(gameId);
       }
 
       io.to(`game:${gameId}`).emit('game:state', gameState);
@@ -605,6 +605,11 @@ io.on('connection', (socket) => {
         },
       });
 
+      await query(
+        `UPDATE games SET winner_wallet = $1, status = 'completed', updated_at = datetime('now') WHERE id = $2`,
+        [winnerWallet, gameId]
+      ).catch(() => {});
+      saveDB();
       activeGames.delete(gameId);
     } catch (err) {
       console.error('[WS] Resign error:', err.message);

@@ -267,7 +267,16 @@ export default function LobbyPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  if (!walletAddress || !player) return null;
+  if (!walletAddress || !player) {
+    return (
+      <div className="min-h-screen bg-gradient-dark flex items-center justify-center">
+        <div className="text-center">
+          <img src="/logo.png" alt="CryptoChess" className="w-12 h-12 mx-auto mb-4 animate-pulse" />
+          <p className="text-white/50">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   // ---- PAYMENT PHASE — Real Solana Pay QR ----
   if (paymentPhase) {
@@ -276,6 +285,11 @@ export default function LobbyPage() {
 
     const recipient = PLATFORM_WALLET || paymentPhase.opponent;
     const memo = `CRYPTOCHESS-${paymentPhase.gameId.slice(0, 16)}-${walletAddress.slice(0, 8)}`;
+
+    // If no platform wallet configured, show warning
+    if (!PLATFORM_WALLET) {
+      console.warn('[LOBBY] PLATFORM_WALLET not set — QR will use opponent address (no escrow!)');
+    }
     const solanaPayUrl = getSolanaPayUrl(recipient, paymentPhase.stake, memo);
 
     return (

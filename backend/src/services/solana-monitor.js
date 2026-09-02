@@ -53,6 +53,19 @@ class SolanaMonitor {
    */
   startMonitoring(gameId, playerWallet, expectedAmount, onConfirmed, onTimeout) {
     if (!this.connection || !this.platformWallet) {
+      // DEV MODE: Auto-confirm payment after 3 seconds (no real blockchain)
+      if (process.env.DEV_MODE === 'true' || process.env.SKIP_PAYMENTS === 'true') {
+        console.log(`[SOLANA-MONITOR] DEV MODE — Auto-confirming payment for ${playerWallet.slice(0, 8)}...`);
+        setTimeout(() => {
+          onConfirmed({
+            wallet: playerWallet,
+            amount: expectedAmount,
+            signature: 'DEV_' + Date.now().toString(36),
+            gameId,
+          });
+        }, 3000);
+        return;
+      }
       console.error('[SOLANA-MONITOR] Not initialized');
       return;
     }

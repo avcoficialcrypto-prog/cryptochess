@@ -106,6 +106,13 @@ async function getPlatformUSDCBalance() {
  * @returns {{ success, signature?, error?, amount? }}
  */
 async function sendPayout(winnerWallet, amount, gameId) {
+  // DEV MODE: Simulate payout
+  if (process.env.DEV_MODE === 'true' || process.env.SKIP_PAYMENTS === 'true') {
+    console.log(`[PAYOUT] DEV MODE — Simulating payout: ${amount} USDC → ${winnerWallet.slice(0, 8)}...`);
+    const fakeSig = 'DEV_PAYOUT_' + Date.now().toString(36);
+    return { success: true, signature: fakeSig, amount };
+  }
+
   if (!initialized || !connection || !platformKeypair) {
     return { success: false, error: 'Payout service not initialized (missing PLATFORM_WALLET_PRIVATE_KEY)' };
   }
