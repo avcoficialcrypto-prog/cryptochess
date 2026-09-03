@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     siteName: 'CryptoChess',
     images: [
       {
-        url: '/og-image.png',
+        url: 'https://cryptochess.duckdns.org/api/og',
         width: 1200,
         height: 630,
         alt: 'CryptoChess - Play Chess, Win Crypto',
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
     title: 'CryptoChess - Play Chess, Win Crypto',
     description: 'Decentralized chess platform with real USDC stakes. No accounts needed.',
-    images: ['/og-image.png'],
+    images: ['https://cryptochess.duckdns.org/api/og'],
   },
   robots: {
     index: true,
@@ -64,8 +64,34 @@ export default function RootLayout({
       <head>
         {/* Google Search Console Verification */}
         <meta name="google-site-verification" content="google60f4cd5cf186200c" />
-          <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer></script>
-  </head>
+        <script src="https://www.google.com/recaptcha/api.js?render=explicit" async defer />
+        {/* JSON-LD Structured Data */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'WebApplication',
+              name: 'CryptoChess',
+              url: 'https://cryptochess.duckdns.org',
+              description: 'Decentralized chess platform with real USDC stakes. No accounts needed — connect Phantom wallet and play.',
+              applicationCategory: 'GameApplication',
+              operatingSystem: 'Web',
+              offers: {
+                '@type': 'Offer',
+                price: '0',
+                priceCurrency: 'USD',
+              },
+              author: {
+                '@type': 'Organization',
+                name: 'CryptoChess',
+                url: 'https://cryptochess.duckdns.org',
+              },
+              keywords: 'chess, crypto, USDC, blockchain, PvP, Solana, gaming, play to earn',
+            }),
+          }}
+        />
+      </head>
       <body className="min-h-screen bg-dark-950 text-white">
         <Providers>
           {children}
