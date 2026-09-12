@@ -1,6 +1,6 @@
 // ============================================================
-// CryptoChess - Game Play Page (Wallet-Only)
-// Interactive chessboard with real-time WebSocket gameplay
+// CryptoChess - Game Play Page (Wallet-Only) — PC Optimized
+// Responsive chessboard, move/check highlights, real-time play
 // ============================================================
 
 'use client';
@@ -20,16 +20,32 @@ import { Chess } from 'chess.js';
 const Chessboard = dynamic(() => import('react-chessboard').then(m => m.Chessboard), {
   ssr: false,
   loading: () => (
-    <div className="w-[480px] h-[480px] bg-dark-700 rounded-xl flex items-center justify-center">
+    <div className="bg-dark-700 rounded-xl flex items-center justify-center animate-pulse" style={{ width: 560, height: 560 }}>
       <div className="text-white/30">Loading board...</div>
     </div>
   ),
 });
 
 import {
-  ArrowLeft, Crown, Flag, ArrowLeftRight, X, Clock,
-  Trophy, AlertTriangle, Loader2, Wallet,
+  ArrowLeft, Crown, Flag, ArrowLeftRight, Clock,
+  Trophy, AlertTriangle, Loader2, Coins,
 } from 'lucide-react';
+
+/** Board square theme — premium green that fits the dark crypto UI */
+const LIGHT_SQUARE = '#EBECD0';
+const DARK_SQUARE = '#739552';
+
+/** Compute responsive board size for the viewport */
+function computeBoardSize(): number {
+  if (typeof window === 'undefined') return 560;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (w >= 1440) return Math.min(680, h - 280);
+  if (w >= 1280) return Math.min(640, h - 260);
+  if (w >= 1024) return Math.min(560, h - 240);
+  if (w >= 768) return Math.min(520, h - 260);
+  return Math.min(w - 40, 460);
+}
 
 export default function GamePage() {
   const { player, walletAddress } = useAuth();
@@ -39,7 +55,7 @@ export default function GamePage() {
   const searchParams = useSearchParams();
 
   const gameId = params.gameId as string;
-  const stakeAmount = parseInt(searchParams.get('stake') || '0');
+  const stakeAmount = parseFloat(searchParams.get('stake') || '0');
 
   const [chess] = useState(() => new Chess());
   const [boardFen, setBoardFen] = useState(chess.fen());
@@ -49,6 +65,7 @@ export default function GamePage() {
   );
   const [opponentWallet, setOpponentWallet] = useState('...');
   const [playerWallets, setPlayerWallets] = useState<{ white: string; black: string }>({ white: 'White', black: 'Black' });
+  const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null);
 
   const [showResignConfirm, setShowResignConfirm] = useState(false);
   const [showDrawOffer, setShowDrawOffer] = useState(false);
@@ -57,7 +74,24 @@ export default function GamePage() {
   const [gameResult, setGameResult] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isCheck, setIsCheck] = useState(false);
+  const [boardSize, setBoardSize] = useState(560);
   const socketRef = useRef<any>(null);
+  const movesScrollRef = useRef<HTMLDivElement>(null);
+  const startedRef = useRef(false);
+
+  // ---- Responsive board sizing (PC-first) ----
+  useEffect(() => {
+    const onResize = () => setBoardSize(computeBoardSize());
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // ---- Auto-scroll move list ----
+  useEffect(() => {
+    const el = movesScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [boardFen]);
 
   useEffect(() => {
     if (!walletAddress || !gameId) return;
@@ -72,34 +106,63 @@ export default function GamePage() {
         setPlayerWallets({ white: state.whitePlayer, black: state.blackPlayer });
         setOpponentWallet(myColor === 'white' ? state.blackPlayer : state.whitePlayer);
       }
-      if (state.isCheck !== undefined) { setIsCheck(state.isCheck); if (state.isCheck) sounds.check(); }
-      if (state.status === 'active') setGameStatus('playing');
-      sounds.gameStart();
+      if (state.lastMove) {
+        setLastMove({ from: state.lastMove.from, to: state.lastMove.to });
+        // Proper move sounds (previously the start chime played on every move)
+        const san: string = state.lastMove.san || '';
+        if (san.includes('#')) sounds.checkmate();
+        else if (san.includes('+')) sounds.check();
+        else if (san.includes('x')) sounds.capture();
+        else sounds.move();
+      }
+      if (state.isCheck !== undefined) setIsCheck(state.isCheck);
+      if (state.status === 'active') {
+        setGameStatus('playing');
+        if (!startedRef.current) {
+          startedRef.current = true;
+          sounds.gameStart();
+        }
+      }
       if (['checkmate', 'stalemate', 'draw', 'resigned', 'disconnected'].includes(state.status)) {
         setGameStatus('finished');
+        const isDraw = state.status === 'stalemate' || state.status === 'draw';
+        const iWon = state.winnerWallet === walletAddress;
+        if (isDraw) sounds.draw();
+        else if (iWon) sounds.checkmate();
+        else sounds.lose();
         setGameResult({
           status: state.status,
           winnerWallet: state.winnerWallet,
           resultMessage: state.resultMessage,
-          isDraw: state.status === 'stalemate' || state.status === 'draw',
+          payoutResult: state.payoutResult,
+          isDraw,
         });
       }
     };
 
     const handleGameStarted = (data: any) => {
-      setMyColor(data.color);
+      // Quick match sends { color }; challenge join only sends { white, black } —
+      // derive color from wallets instead of clobbering the URL-derived one
+      if (data.white && data.black && walletAddress) {
+        if (walletAddress === data.white) setMyColor('white');
+        else if (walletAddress === data.black) setMyColor('black');
+      } else if (data.color === 'white' || data.color === 'black') {
+        setMyColor(data.color);
+      }
       setGameStatus('playing');
+      startedRef.current = true;
+      sounds.gameStart();
       if (data.opponent) setOpponentWallet(data.opponent.wallet.slice(0, 6) + '...' + data.opponent.wallet.slice(-4));
     };
 
     const handleGameMatched = (data: any) => {
-      setMyColor(data.color);
+      if (data.color === 'white' || data.color === 'black') setMyColor(data.color);
       setGameStatus('playing');
       if (data.opponent) setOpponentWallet(data.opponent.wallet.slice(0, 6) + '...' + data.opponent.wallet.slice(-4));
     };
 
-    const handleMoveError = (data: any) => { setErrorMessage(data.error); setTimeout(() => setErrorMessage(''), 3000); };
-    const handleGameError = (data: any) => { setErrorMessage(data.error); setTimeout(() => setErrorMessage(''), 5000); };
+    const handleMoveError = (data: any) => { setErrorMessage(data.error); sounds.error(); setTimeout(() => setErrorMessage(''), 3000); };
+    const handleGameError = (data: any) => { setErrorMessage(data.error); sounds.error(); setTimeout(() => setErrorMessage(''), 5000); };
     const handleDrawOffer = (data: any) => { setDrawOffered(true); setDrawOfferedBy(data.offeredBy); };
     const handleDrawDeclined = () => { setShowDrawOffer(false); setErrorMessage(t.game.drawDeclined); setTimeout(() => setErrorMessage(''), 3000); };
 
@@ -120,7 +183,7 @@ export default function GamePage() {
       socket.off('game:draw-offered', handleDrawOffer);
       socket.off('game:draw-declined', handleDrawDeclined);
     };
-  }, [walletAddress, gameId, router, chess, myColor]);
+  }, [walletAddress, gameId, router, chess, myColor, t]);
 
   const onDrop = useCallback((sourceSquare: string, targetSquare: string) => {
     if (gameStatus !== 'playing') return false;
@@ -146,6 +209,33 @@ export default function GamePage() {
 
   const isMyTurn = chess.turn() === (myColor === 'white' ? 'w' : 'b');
 
+  /** Square of the king in check (side to move) */
+  const getCheckSquare = (): string | null => {
+    if (!isCheck) return null;
+    const turn = chess.turn();
+    for (const row of chess.board()) {
+      for (const piece of row) {
+        if (piece && piece.type === 'k' && piece.color === turn) return piece.square;
+      }
+    }
+    return null;
+  };
+
+  // ---- Square highlights: last move (gold) + check (red glow) ----
+  const squareStyles: Record<string, React.CSSProperties> = {};
+  if (lastMove) {
+    const hl = { backgroundColor: 'rgba(240, 185, 11, 0.38)' };
+    squareStyles[lastMove.from] = hl;
+    squareStyles[lastMove.to] = hl;
+  }
+  const checkSquare = getCheckSquare();
+  if (checkSquare) {
+    squareStyles[checkSquare] = {
+      backgroundColor: 'rgba(255, 51, 102, 0.5)',
+      boxShadow: 'inset 0 0 14px rgba(255, 51, 102, 0.9)',
+    };
+  }
+
   const getResultMessage = () => {
     if (!gameResult) return '';
     const { status } = gameResult;
@@ -159,9 +249,20 @@ export default function GamePage() {
     }
   };
 
+  // Move list — pair white/black moves per row
+  const history = chess.history();
+  const moveRows: { n: number; w: string; b?: string }[] = [];
+  for (let i = 0; i < history.length; i += 2) {
+    moveRows.push({ n: i / 2 + 1, w: history[i], b: history[i + 1] });
+  }
+
+  const totalPot = stakeAmount * 2;
+  const winnerPayout = totalPot * 0.95;
+
   return (
     <div className="min-h-screen bg-dark-950">
-      <div className="max-w-7xl mx-auto px-4 py-4">
+      <div className="max-w-[1400px] mx-auto px-4 lg:px-8 py-4">
+
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <button onClick={() => router.push('/')} className="flex items-center gap-2 text-white/40 hover:text-white transition-colors">
@@ -169,94 +270,106 @@ export default function GamePage() {
           </button>
           <div className="flex items-center gap-3">
             <LanguageSwitcher />
-            <span className="text-sm text-white/40">{t.game.stake}</span>
+            <span className="text-sm text-white/40 hidden sm:inline">{t.game.stake}</span>
             <span className="badge-gold text-sm">{stakeAmount} {t.usdc}</span>
           </div>
         </div>
 
-        {/* Main Layout */}
-        <div className="flex flex-col lg:flex-row gap-6 items-start justify-center">
-          {/* Left: Opponent */}
-          <div className="w-full lg:w-64 space-y-4">
-            <div className="card">
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${myColor === 'white' ? 'bg-dark-600' : 'bg-white/10'}`}>
-                  {<img src="/logo.png" alt="" className="w-6 h-6 rounded" />}
+        {/* Main Layout — 3 columns on desktop, sticky side panels */}
+        <div className="flex flex-col lg:flex-row gap-5 items-start justify-center">
+
+          {/* Left: Opponent + Move list */}
+          <div className="w-full lg:w-72 shrink-0 space-y-4 lg:sticky lg:top-4">
+            <div className="card p-4">
+              <div className="flex items-center gap-3">
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-2xl ${myColor === 'white' ? 'bg-dark-600' : 'bg-white/10'}`}>
+                  {myColor === 'white' ? '♚' : '♔'}
                 </div>
-                <div>
-                  <div className="text-sm text-white/40">{myColor === 'white' ? 'Black' : 'White'}</div>
-                  <div className="font-bold font-mono text-sm">{opponentWallet}</div>
+                <div className="min-w-0">
+                  <div className="text-xs text-white/40 uppercase tracking-wide">{myColor === 'white' ? 'Black' : 'White'}</div>
+                  <div className="font-bold font-mono text-sm truncate">{opponentWallet}</div>
                 </div>
+                <div className={`ml-auto w-2.5 h-2.5 rounded-full ${gameStatus === 'playing' ? 'bg-neon-green animate-pulse' : gameStatus === 'finished' ? 'bg-gold-400' : 'bg-white/30'}`} />
               </div>
-            </div>
-            <div className="card">
-              <div className="flex items-center gap-2 mb-2">
-                {gameStatus === 'playing' && <div className="pulse-dot" />}
-                {gameStatus === 'finished' && <Trophy className="w-4 h-4 text-gold-400" />}
-                {gameStatus === 'connecting' && <Loader2 className="w-4 h-4 animate-spin text-white/40" />}
-                <span className="text-sm font-medium">
-                  {gameStatus === 'playing' && (isMyTurn ? t.game.yourTurn : t.game.opponentsTurn)}
-                  {gameStatus === 'connecting' && t.game.connecting}
-                  {gameStatus === 'finished' && t.gameOver.backToLobby}
-                </span>
+              <div className={`mt-3 text-sm font-medium flex items-center gap-2 ${isMyTurn && gameStatus === 'playing' ? 'text-neon-green' : 'text-white/50'}`}>
+                {gameStatus === 'playing' && (isMyTurn ? t.game.yourTurn : t.game.opponentsTurn)}
+                {gameStatus === 'connecting' && <><Loader2 className="w-3.5 h-3.5 animate-spin" />{t.game.connecting}</>}
+                {gameStatus === 'finished' && t.gameOver.backToLobby}
               </div>
               {gameStatus === 'playing' && (
-                <div className="text-xs text-white/30">
+                <div className="text-xs text-white/30 mt-1">
                   {chess.turn() === 'w' ? t.game.whiteToMove : t.game.blackToMove}
-                  {isCheck && <span className="text-neon-red ml-1">— {t.game.check}</span>}
+                  {isCheck && <span className="text-neon-red ml-1 font-bold">— {t.game.check}</span>}
                 </div>
               )}
             </div>
-            <div className="card max-h-60 overflow-y-auto">
-              <div className="text-sm font-medium text-white/50 mb-2">{t.game.moves}</div>
-              <div className="space-y-1 font-mono text-sm">
-                {chess.history({ verbose: true }).length === 0 ? (
-                  <div className="text-white/20 text-xs">{t.game.noMoves}</div>
+
+            <div className="card p-4">
+              <div className="text-sm font-medium text-white/50 mb-2 flex items-center gap-2">
+                {t.game.moves}
+                <span className="text-xs text-white/25 ml-auto">{moveRows.length}</span>
+              </div>
+              <div ref={movesScrollRef} className="max-h-64 overflow-y-auto pr-1">
+                {moveRows.length === 0 ? (
+                  <div className="text-white/20 text-xs py-2">{t.game.noMoves}</div>
                 ) : (
-                  chess.history({ verbose: true }).map((move: any, i: number) => {
-                    if (move.color === 'w') {
-                      const blackMove = chess.history({ verbose: true })[i + 1];
-                      return (
-                        <div key={i} className="flex gap-2">
-                          <span className="text-white/30 w-6">{Math.floor(i / 2) + 1}.</span>
-                          <span className="text-white/80">{move.san}</span>
-                          {blackMove && <span className="text-white/50">{blackMove.san}</span>}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })
+                  <div className="grid grid-cols-2 gap-x-4">
+                    {moveRows.map((row, i) => (
+                      <div key={i} className="flex gap-1.5 font-mono text-[13px] py-0.5 leading-6">
+                        <span className="text-white/30 w-6 text-right shrink-0">{row.n}.</span>
+                        <span className="text-white/85 min-w-[3rem]">{row.w}</span>
+                        <span className="text-white/50">{row.b || ''}</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
           </div>
 
           {/* Center: Board */}
-          <div className="flex flex-col items-center">
-            <div className="text-center mb-2 text-sm text-white/30 font-mono">
-              {myColor === 'black' ? playerWallets.white : playerWallets.black}
+          <div className="flex flex-col items-center mx-auto lg:mx-0">
+            <div className="w-full flex items-center justify-between mb-2" style={{ maxWidth: boardSize }}>
+              <span className="text-sm text-white/40 font-mono truncate">
+                {myColor === 'black' ? playerWallets.white : playerWallets.black}
+              </span>
+              <span className="text-xs text-white/30 font-mono shrink-0 ml-2">
+                {myColor === 'black' ? '♔ White' : '♚ Black'}
+              </span>
             </div>
             <div className="relative">
               <Chessboard
                 position={boardFen}
                 onPieceDrop={onDrop}
                 boardOrientation={myColor}
-                boardWidth={480}
+                boardWidth={boardSize}
                 animationDuration={200}
                 arePiecesDraggable={gameStatus === 'playing' && isMyTurn}
-                customDarkSquareStyle={{ backgroundColor: '#b58863' }}
-                customLightSquareStyle={{ backgroundColor: '#f0d9b5' }}
+                customDarkSquareStyle={{ backgroundColor: DARK_SQUARE }}
+                customLightSquareStyle={{ backgroundColor: LIGHT_SQUARE }}
                 customBoardStyle={{ borderRadius: '12px', boxShadow: '0 8px 40px rgba(0, 0, 0, 0.6)' }}
-                customNotationStyle={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}
+                customSquareStyles={squareStyles}
+                customNotationStyle={{ fontSize: '11px', fontWeight: '600' }}
               />
+              {gameStatus === 'connecting' && (
+                <div className="absolute inset-0 bg-dark-950/80 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center z-10">
+                  <Loader2 className="w-10 h-10 text-gold-400 animate-spin mb-3" />
+                  <p className="text-white/60 text-sm">{t.game.connecting}</p>
+                </div>
+              )}
               {errorMessage && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-neon-red/90 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg animate-pulse z-10">
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-neon-red/90 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg z-10">
                   {errorMessage}
                 </div>
               )}
             </div>
-            <div className="text-center mt-2 text-sm text-white/30 font-mono">
-              {myColor === 'white' ? playerWallets.white : playerWallets.black} ({t.game.you})
+            <div className="w-full flex items-center justify-between mt-2" style={{ maxWidth: boardSize }}>
+              <span className="text-sm font-mono text-gold-400 truncate">
+                {myColor === 'white' ? playerWallets.white : playerWallets.black}
+              </span>
+              <span className="text-xs text-gold-400/60 shrink-0 ml-2">
+                {myColor === 'white' ? '♔ White' : '♚ Black'} ({t.game.you})
+              </span>
             </div>
 
             {gameStatus === 'playing' && (
@@ -275,30 +388,33 @@ export default function GamePage() {
             )}
           </div>
 
-          {/* Right: Player Info */}
-          <div className="w-full lg:w-64 space-y-4">
-            <div className="card border-gold-400/20">
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${myColor === 'white' ? 'bg-white/10' : 'bg-dark-600'}`}>
-                  {myColor === 'white' ? '♔' : '♟'}
+          {/* Right: Player info + Prize pool */}
+          <div className="w-full lg:w-72 shrink-0 space-y-4 lg:sticky lg:top-4">
+            <div className="card p-4 border-gold-400/20">
+              <div className="flex items-center gap-3">
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-2xl ${myColor === 'white' ? 'bg-white/10' : 'bg-dark-600'}`}>
+                  {myColor === 'white' ? '♔' : '♚'}
                 </div>
-                <div>
-                  <div className="text-sm text-white/40">{myColor === 'white' ? 'White' : 'Black'}</div>
-                  <div className="font-bold font-mono text-sm text-gold-400">{walletAddress?.slice(0, 6)}...{walletAddress?.slice(-4)}</div>
+                <div className="min-w-0">
+                  <div className="text-xs text-white/40 uppercase tracking-wide">{myColor === 'white' ? 'White' : 'Black'}</div>
+                  <div className="font-bold font-mono text-sm text-gold-400 truncate">{walletAddress?.slice(0, 6)}...{walletAddress?.slice(-4)}</div>
                 </div>
               </div>
-              <div className="badge-green text-xs">{t.game.you}</div>
+              <div className="mt-3"><span className="badge-green text-xs">{t.game.you}</span></div>
             </div>
 
-            <div className="card">
-              <div className="text-sm text-white/40 mb-2">{t.game.prizePool}</div>
-              <div className="text-2xl font-bold text-gold-400">{(stakeAmount * 2).toFixed(0)} {t.usdc}</div>                <div className="text-xs text-white/30 mt-1">
-                Winner: {((stakeAmount * 2) * 0.95).toFixed(2)} (5% fee)
+            <div className="card p-4">
+              <div className="text-sm text-white/40 mb-1 flex items-center gap-2">
+                <Coins className="w-4 h-4 text-gold-400" />{t.game.prizePool}
+              </div>
+              <div className="text-3xl font-bold text-gold-400">{totalPot.toFixed(2)} <span className="text-base text-white/40">{t.usdc}</span></div>
+              <div className="text-xs text-white/30 mt-2 leading-relaxed">
+                {t.game.fee} · Winner: <span className="text-neon-green font-bold">{winnerPayout.toFixed(2)} USDC</span>
               </div>
             </div>
 
             {gameStatus === 'playing' && (
-              <div className={`card ${isMyTurn ? 'border-neon-green/30' : 'border-neon-red/30'}`}>
+              <div className={`card p-4 ${isMyTurn ? 'border-neon-green/30' : 'border-neon-red/30'}`}>
                 <div className={`flex items-center gap-2 ${isMyTurn ? 'text-neon-green' : 'text-neon-red'}`}>
                   {isMyTurn ? (
                     <><Clock className="w-4 h-4" /><span className="text-sm font-bold">{t.game.yourTurnIndicator}</span></>
@@ -344,32 +460,47 @@ export default function GamePage() {
         )}
 
         {gameStatus === 'finished' && gameResult && (
-          <div className="modal-overlay">
-            <div className="modal-content text-center">
-              {gameResult.isDraw ? (
-                <><ArrowLeftRight className="w-16 h-16 text-neon-blue mx-auto mb-4" /><h2 className="text-2xl font-bold mb-2">{t.gameOver.drawResult}</h2></>
-              ) : gameResult.winnerWallet === walletAddress ? (
-                <><Trophy className="w-16 h-16 text-gold-400 mx-auto mb-4 animate-float" /><h2 className="text-2xl font-bold text-gradient mb-2">{t.gameOver.victory}</h2></>
-              ) : (
-                <><Crown className="w-16 h-16 text-white/40 mx-auto mb-4" /><h2 className="text-2xl font-bold mb-2">{t.gameOver.defeat}</h2></>
-              )}
-              <p className="text-white/40 mb-4">{getResultMessage()}</p>
-              <div className="card bg-dark-700/50 mb-6">
-                <div className="text-sm text-white/40 mb-1">{t.game.stake}</div>
-                <div className="text-xl font-bold text-gold-400">{stakeAmount} {t.usdc}</div>
-                {!gameResult.isDraw && (
-                  <div className="text-xs text-white/30 mt-1">
-                    {gameResult.winnerWallet === walletAddress
-                      ? `+${(stakeAmount * 2 * 0.95).toFixed(2)} USDC sent to your wallet`
-                      : `-${stakeAmount} ${t.gameOver.lost}`}
-                  </div>
+          <>
+            {!gameResult.isDraw && gameResult.winnerWallet === walletAddress && (
+              <WinnerCelebration winner="you" payout={winnerPayout} />
+            )}
+            <div className="modal-overlay">
+              <div className="modal-content text-center">
+                {gameResult.isDraw ? (
+                  <><ArrowLeftRight className="w-16 h-16 text-neon-blue mx-auto mb-4" /><h2 className="text-2xl font-bold mb-2">{t.gameOver.drawResult}</h2></>
+                ) : gameResult.winnerWallet === walletAddress ? (
+                  <><Trophy className="w-16 h-16 text-gold-400 mx-auto mb-4 animate-float" /><h2 className="text-2xl font-bold text-gradient mb-2">{t.gameOver.victory}</h2></>
+                ) : (
+                  <><Crown className="w-16 h-16 text-white/40 mx-auto mb-4" /><h2 className="text-2xl font-bold mb-2">{t.gameOver.defeat}</h2></>
                 )}
+                <p className="text-white/40 mb-4">{getResultMessage()}</p>
+                <div className="card bg-dark-700/50 mb-6">
+                  <div className="text-sm text-white/40 mb-1">{t.game.stake}</div>
+                  <div className="text-xl font-bold text-gold-400">{stakeAmount} {t.usdc}</div>
+                  {!gameResult.isDraw && (
+                    <div className="text-xs text-white/30 mt-1">
+                      {gameResult.winnerWallet === walletAddress
+                        ? `+${winnerPayout.toFixed(2)} USDC sent to your wallet`
+                        : `-${stakeAmount} ${t.gameOver.lost}`}
+                    </div>
+                  )}
+                  {gameResult.payoutResult?.signature && (
+                    <a
+                      href={`https://solscan.io/tx/${gameResult.payoutResult.signature}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-neon-blue mt-2 inline-block hover:underline"
+                    >
+                      View payout on Solscan →
+                    </a>
+                  )}
+                </div>
+                <button onClick={() => router.push('/lobby')} className="btn-primary w-full text-center">
+                  {t.gameOver.backToLobby}
+                </button>
               </div>
-              <button onClick={() => router.push('/lobby')} className="btn-primary w-full text-center">
-                {t.gameOver.backToLobby}
-              </button>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>

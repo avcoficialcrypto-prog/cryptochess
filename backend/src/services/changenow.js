@@ -29,7 +29,7 @@ async function createChangeNOWOrder(fromAmount, toAddress) {
       'x-changenow-api-key': apiKey
     },
     body: JSON.stringify({
-      from_currency: 'usdt',
+      from_currency: 'usdc', // commission pool is accumulated in USDC
       to_currency: 'xmr',
       from_amount: fromAmount.toString(),
       receiver_address: toAddress,

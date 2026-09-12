@@ -151,10 +151,11 @@ async function startGame(gameId, payment, stakeAmount) {
     if (s.walletAddress === payment.black) activeGames.get(gameId).black.socketId = sid;
   }
 
-  // Update game status        await query(
-          `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
-          [gameId]
-        ).catch(e => console.error('[WS] Game status update error:', e.message));
+  // Update game status
+  await query(
+    `UPDATE games SET status = 'active', updated_at = datetime('now') WHERE id = $1`,
+    [gameId]
+  ).catch(e => console.error('[WS] Game status update error:', e.message));
 
   const whiteShort = payment.white.slice(0, 6) + '...' + payment.white.slice(-4);
   const blackShort = payment.black.slice(0, 6) + '...' + payment.black.slice(-4);
@@ -178,23 +179,111 @@ async function startGame(gameId, payment, stakeAmount) {
   console.log(`[WS] ✅ Both paid on-chain, game started: ${gameId} | ${stakeAmount} USDC`);
 }
 
+/**
+ * Helper: Start a NEW payment phase for a player who already paid in a
+ * previous game (re-queue after opponent never paid / left).
+ * The paid player must NOT be asked to pay twice — auto-mark them as paid.
+ */
+async function startMatchForPaidPlayer(paidWallet, oppWallet, oppSocketId, stakeAmount, newGameId) {
+  paymentPhase.startPaymentPhase(
+    newGameId,
+    paidWallet,
+    oppWallet,
+    stakeAmount,
+    handleExpiryDecision
+  );
+
+  await query(
+    `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
+     VALUES ($1, $2, $3, $4, 'payment_pending')`,
+    [newGameId, paidWallet, oppWallet, stakeAmount]
+  ).catch(e => console.error('[WS] New game insert error:', e.message));
+
+  // Their USDC is already in the platform wallet — carry over the payment
+  paymentPhase.markPaid(newGameId, paidWallet);
+
+  socket_join_room(oppSocketId, newGameId);
+
+  io.to(oppSocketId).emit('payment:required', {
+    gameId: newGameId,
+    color: 'black',
+    stake: stakeAmount,
+    opponent: { wallet: paidWallet },
+    timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
+  });
+
+  console.log(`[WS] Re-matched paid player: ${paidWallet.slice(0, 8)} vs ${oppWallet.slice(0, 8)} | ${stakeAmount} USDC | new game ${newGameId.slice(0, 8)}`);
+}
+
+function socket_join_room(socketId, gameId) {
+  const s = io.sockets.sockets.get(socketId);
+  if (s) s.join(`game:${gameId}`);
+}
+
+/**
+ * Act on a payment-phase expiry decision (60s timer ran out).
+ * Handles the critical case: one player paid real USDC, the other didn't.
+ * The paid player is re-queued (without paying twice) or made refund-eligible.
+ */
+async function handleExpiryDecision(decision) {
+  if (!decision) return;
+
+  if (decision.action === 'cancel') {
+    await query(
+      `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
+      [decision.gameId]
+    ).catch(() => {});
+    saveDB();
+    return;
+  }
+
+  if (decision.action === 'refund') {
+    // Leaver had paid — refund them automatically on-chain
+    const r = await solanaPayout.sendRefund(decision.paidWallet, decision.stakeAmount, decision.gameId);
+    if (r.success) {
+      await escrow.recordRefund(decision.paidWallet, decision.stakeAmount, decision.gameId, 'Refund — left payment phase');
+      await query(
+        `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
+        [decision.gameId]
+      ).catch(() => {});
+      saveDB();
+      const sid = [...io.sockets.sockets.entries()].find(([id, s]) => s.walletAddress === decision.paidWallet)?.[0];
+      if (sid) io.to(sid).emit('payment:refunded', { amount: decision.stakeAmount, signature: r.signature, onChain: true });
+    } else {
+      // On-chain refund failed — fall back to manual claim window
+      paymentPhase.makeRefundEligible(decision.paidWallet, decision.gameId, decision.stakeAmount);
+    }
+    return;
+  }
+
+  if (decision.action === 'requeue') {
+    const paidSocketId = [...io.sockets.sockets.entries()]
+      .find(([id, s]) => s.walletAddress === decision.paidWallet)?.[0];
+
+    // Notify the paid player while re-matching happens
+    if (paidSocketId) {
+      io.to(paidSocketId).emit('payment:opponent_left', {
+        gameId: decision.gameId,
+        stakeAmount: decision.stakeAmount,
+        message: 'Your opponent did not pay. Searching for a new rival...',
+      });
+    }
+
+    await paymentPhase.recoverPaidPlayer({
+      paidWallet: decision.paidWallet,
+      originalGameId: decision.gameId,
+      stakeAmount: decision.stakeAmount,
+      socketId: paidSocketId,
+      io,
+      startMatchFn: startMatchForPaidPlayer,
+    });
+  }
+}
+
 // ============================================================
 // Socket.io Wallet Auth Middleware
 // ============================================================
-io.use((socket, next) => {
-  const walletAddress = socket.handshake.auth.walletAddress;
-
-  if (!walletAddress) {
-    return next(new Error('Wallet address required'));
-  }
-
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletAddress)) {
-    return next(new Error('Invalid wallet address'));
-  }
-
-  socket.walletAddress = walletAddress;
-  next();
-});
+io.use(authenticateSocket);
 
 // ============================================================
 // Socket.io Connection Handler
@@ -223,12 +312,14 @@ io.on('connection', (socket) => {
         const gameId = matchResult.gameId;
         const opponent = matchResult.opponent;
 
-        // Start payment phase (60s timer) — NO fake balance deduction
+        // Start payment phase (60s timer) — NO fake balance deduction.
+        // On expiry, handleExpiryDecision re-queues / refunds the player who paid.
         paymentPhase.startPaymentPhase(
           gameId,
           socket.walletAddress,
           opponent.walletAddress,
-          stakeAmount
+          stakeAmount,
+          handleExpiryDecision
         );
 
         // Create game record (status: payment_pending)
@@ -428,7 +519,8 @@ io.on('connection', (socket) => {
         game.id,
         game.white_wallet,
         socket.walletAddress,
-        stakeAmount
+        stakeAmount,
+        handleExpiryDecision
       );
 
       // Update game
@@ -697,48 +789,47 @@ io.on('connection', (socket) => {
     for (const [gameId, payment] of paymentPhase.pendingPayments) {
       if (payment.white === socket.walletAddress || payment.black === socket.walletAddress) {
         const cancelResult = paymentPhase.cancelPayment(gameId, socket.walletAddress);
+
         if (cancelResult && cancelResult.action === 'requeue') {
-          // The other player paid on-chain — requeue them
-          const oppSocketId = [...io.sockets.sockets.entries()]
+          // The player who stayed paid real USDC — re-queue them (no double payment)
+          const paidSocketId = [...io.sockets.sockets.entries()]
             .find(([id, s]) => s.walletAddress === cancelResult.paidWallet)?.[0];
-          if (oppSocketId) {
-            io.to(oppSocketId).emit('payment:opponent_left', {
+
+          if (paidSocketId) {
+            io.to(paidSocketId).emit('payment:opponent_left', {
               gameId,
               stakeAmount: cancelResult.stakeAmount,
               message: 'Your opponent did not pay. Searching for a new rival...',
             });
-            // Re-queue the paid player
-            matchmaking.joinQueue(cancelResult.paidWallet, cancelResult.stakeAmount, oppSocketId)
-              .then(async (reMatch) => {
-                if (reMatch.status === 'matched') {
-                  const newPayment = paymentPhase.startPaymentPhase(
-                    reMatch.gameId,
-                    cancelResult.paidWallet,
-                    reMatch.opponent.walletAddress,
-                    cancelResult.stakeAmount
-                  );
-                  await query(
-                    `INSERT INTO games (id, white_wallet, black_wallet, stake_amount, status)
-                     VALUES ($1, $2, $3, $4, 'payment_pending')`,
-                    [reMatch.gameId, cancelResult.paidWallet, reMatch.opponent.walletAddress, cancelResult.stakeAmount]
-                  );
-                  io.to(oppSocketId).emit('payment:required', {
-                    gameId: reMatch.gameId,
-                    color: 'white',
-                    stake: cancelResult.stakeAmount,
-                    opponent: { wallet: reMatch.opponent.walletAddress },
-                    timeLimitMs: paymentPhase.PAYMENT_TIMEOUT_MS,
-                  });
-                } else {
-                  // No immediate match — make eligible for refund after 60s
-                  paymentPhase.makeRefundEligible(cancelResult.paidWallet, gameId, cancelResult.stakeAmount);
-                  io.to(oppSocketId).emit('payment:waiting_refund', {
-                    gameId,
-                    stakeAmount: cancelResult.stakeAmount,
-                    refundEligibleAt: Date.now() + paymentPhase.REMATCH_TIMEOUT_MS,
-                  });
-                }
-              }).catch(err => console.error('[WS] Re-queue error:', err.message));
+
+            paymentPhase.recoverPaidPlayer({
+              paidWallet: cancelResult.paidWallet,
+              originalGameId: gameId,
+              stakeAmount: cancelResult.stakeAmount,
+              socketId: paidSocketId,
+              io,
+              startMatchFn: startMatchForPaidPlayer,
+            }).catch(err => console.error('[WS] Re-queue error:', err.message));
+          }
+        } else if (cancelResult && cancelResult.action === 'refund') {
+          // The LEAVER had paid (opponent never did) — refund them on-chain
+          try {
+            const r = await solanaPayout.sendRefund(socket.walletAddress, cancelResult.stakeAmount, gameId);
+            if (r.success) {
+              await escrow.recordRefund(socket.walletAddress, cancelResult.stakeAmount, gameId, 'Refund — left payment phase');
+              await query(
+                `UPDATE games SET status = 'cancelled', updated_at = datetime('now') WHERE id = $1`,
+                [gameId]
+              ).catch(() => {});
+              saveDB();
+              console.log(`[WS] Refunded leaver: ${socket.walletAddress.slice(0, 8)} | ${cancelResult.stakeAmount} USDC`);
+            } else {
+              // On-chain refund failed — allow manual claim
+              paymentPhase.makeRefundEligible(socket.walletAddress, gameId, cancelResult.stakeAmount);
+            }
+          } catch (e) {
+            console.error('[WS] Leaver refund error:', e.message);
+            paymentPhase.makeRefundEligible(socket.walletAddress, gameId, cancelResult.stakeAmount);
           }
         }
       }

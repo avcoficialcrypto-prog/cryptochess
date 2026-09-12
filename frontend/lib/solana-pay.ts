@@ -198,12 +198,12 @@ export async function verifyPayment(
   gameId: string
 ): Promise<{ valid: boolean; error?: string }> {
   try {
-    const token = localStorage.getItem('crypto_chess_token');
+    const wallet = typeof window !== 'undefined' ? localStorage.getItem('cryptochess_wallet') : null;
     const res = await fetch(`${BACKEND_URL}/api/solana/verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        ...(wallet ? { 'x-wallet-address': wallet } : {}),
       },
       body: JSON.stringify({ signature, expectedAmount, gameId }),
     });

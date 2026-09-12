@@ -123,7 +123,7 @@ const es: TranslationKeys = {
     stake: 'Apuesta:',
     you: 'Tú',
     prizePool: 'Bote Total',
-    fee: 'comisión 3%',
+    fee: 'comisión 5%',
     yourTurnIndicator: 'TU TURNO',
     waitingForOpponent: 'Esperando al oponente...',
     vs: 'vs',

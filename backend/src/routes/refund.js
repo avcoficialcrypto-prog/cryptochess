@@ -7,20 +7,22 @@ const express = require('express');
 const solanaPayout = require('../services/solana-payout');
 const paymentPhase = require('../services/payment-phase');
 const escrow = require('../services/escrow');
+const { authenticateWallet } = require('../middleware/auth');
 
 const router = express.Router();
 
 /**
  * POST /api/refund
  * Process a real USDC refund on-chain
- * Body: { walletAddress, gameId }
+ * Body: { gameId } — wallet comes from the authenticated header
  */
-router.post('/', async (req, res) => {
+router.post('/', authenticateWallet, async (req, res) => {
   try {
-    const { walletAddress, gameId } = req.body;
+    const { gameId } = req.body;
+    const walletAddress = req.walletAddress;
 
-    if (!walletAddress || !gameId) {
-      return res.status(400).json({ error: 'walletAddress and gameId required' });
+    if (!gameId) {
+      return res.status(400).json({ error: 'gameId required' });
     }
 
     // Check if player is eligible for refund

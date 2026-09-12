@@ -22,6 +22,8 @@ class SolanaMonitor {
     this.platformWallet = null;
     this.pollingIntervals = new Map(); // gameId -> intervalId
     this.confirmedPayments = new Map(); // gameId -> { wallet, amount, signature, confirmedAt }
+    this.lastSignatures = new Map();    // gameId-player -> cursor of last processed signature
+    this.claimedSignatures = new Set(); // signatures already settled — one tx must never settle two games
     this.POLL_INTERVAL_MS = 4000; // Poll every 4 seconds
     this.MAX_POLL_DURATION_MS = 90 * 1000; // Stop polling after 90s
   }
@@ -77,7 +79,11 @@ class SolanaMonitor {
 
     const memo = `CRYPTOCHESS-${gameId}-${playerWallet.slice(0, 8)}`;
     const startTime = Date.now();
-    let lastSignature = null;
+    // Per game+player cursor so two concurrent monitorings never skip
+    // each other's newly-arrived signatures
+    const lastSigKey = `${gameId}-${playerWallet}`;
+    if (!this.lastSignatures) this.lastSignatures = new Map();
+    let lastSignature = this.lastSignatures.get(lastSigKey) || null;
 
     console.log(`[SOLANA-MONITOR] Watching for ${expectedAmount} USDC from ${playerWallet.slice(0, 8)}... in game ${gameId.slice(0, 8)}...`);
 
@@ -97,6 +103,8 @@ class SolanaMonitor {
           return;
         }
 
+        // NOTE: wallets normally hold a single USDC ATA. Cross-game
+        // misattribution is prevented by the mandatory memo match below.
         const tokenAccount = tokenAccounts.value[0].pubkey;
 
         // Get recent transaction signatures for this token account
@@ -140,14 +148,35 @@ class SolanaMonitor {
                     const sourceOwner = sourceInfo?.value?.data?.parsed?.info?.owner;
 
                     if (sourceOwner === playerWallet) {
-                      // Found it! Check memo
+                      // MANDATORY memo match — the frontend sends
+                      // `CRYPTOCHESS-<gameId>-<wallet8>`. Without this check,
+                      // two concurrent games with the same stake could consume
+                      // each other's payment.
                       const memoIx = instructions.find(
                         i => i.programId?.toBase58() === MEMO_PROGRAM
                       );
-                      const memoText = memoIx?.parsed || '';
+                      const memoText =
+                        typeof memoIx?.parsed === 'string'
+                          ? memoIx.parsed
+                          : memoIx?.parsed?.memo || '';
 
-                      // Match memo or just match amount + source
-                      console.log(`[SOLANA-MONITOR] ✅ Payment detected! ${amount} USDC from ${playerWallet.slice(0, 8)} | Sig: ${sigInfo.signature.slice(0, 16)}...`);
+                      // The lobby memo truncates the gameId to 16 chars
+                      // (CRYPTOCHESS-<gameId16>-<wallet8>) — accept full or
+                      // 16-char prefix match. Combined with amount + source
+                      // owner, this is collision-safe.
+                      const shortGameId = String(gameId).slice(0, 16);
+                      if (!(memoText.includes(gameId) || memoText.includes(shortGameId))) {
+                        // Same amount but different game's memo — not ours
+                        continue;
+                      }
+
+                      // Global dedupe — one signature can only settle one game
+                      if (this.claimedSignatures.has(sigInfo.signature)) {
+                        continue;
+                      }
+                      this.claimedSignatures.add(sigInfo.signature);
+
+                      console.log(`[SOLANA-MONITOR] ✅ Payment detected! ${amount} USDC from ${playerWallet.slice(0, 8)} | Memo: ${memoText} | Sig: ${sigInfo.signature.slice(0, 16)}...`);
 
                       // Store confirmed payment
                       this.confirmedPayments.set(`${gameId}-${playerWallet}`, {
@@ -190,7 +219,7 @@ class SolanaMonitor {
             }
           }
 
-          lastSignature = sigInfo.signature;
+          this.lastSignatures.set(lastSigKey, sigInfo.signature);
         }
       } catch (err) {
         // RPC errors are expected (rate limiting, etc.) — just continue polling

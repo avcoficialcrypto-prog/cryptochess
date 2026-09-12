@@ -6,13 +6,14 @@
 'use client';
 
 import { io, Socket } from 'socket.io-client';
+import { peekCachedAuth } from './wallet-signature';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
 let socket: Socket | null = null;
 
 /**
- * Get or create socket connection using wallet address
+ * Get or create socket connection using wallet address (+ ownership signature)
  */
 export function getSocket(walletAddress: string): Socket {
   if (socket && socket.connected) {
@@ -20,7 +21,10 @@ export function getSocket(walletAddress: string): Socket {
   }
 
   socket = io(BACKEND_URL, {
-    auth: { walletAddress },
+    auth: {
+      walletAddress,
+      ...getAuthPayload(),
+    },
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: 10,
@@ -59,4 +63,14 @@ export function disconnectSocket() {
  */
 export function getSocketInstance(): Socket | null {
   return socket;
+}
+
+/**
+ * Sync best-effort auth payload: use cached signature if available
+ * (signed earlier by api.getAuthSignature), otherwise address-only.
+ */
+function getAuthPayload(): { authSignature?: string; authNonce?: string } {
+  const cached = peekCachedAuth();
+  if (cached) return { authSignature: cached.signature, authNonce: cached.nonce };
+  return {};
 }

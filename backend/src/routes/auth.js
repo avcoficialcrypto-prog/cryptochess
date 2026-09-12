@@ -5,10 +5,34 @@
 // ============================================================
 
 const express = require('express');
-const { authenticateWallet } = require('../middleware/auth');
+const { authenticateWallet, issueChallenge } = require('../middleware/auth');
 const { query } = require('../db/connection');
 
 const router = express.Router();
+
+/**
+ * POST /api/auth/challenge
+ * Issue a one-time signing challenge proving wallet ownership.
+ * Body: { walletAddress }
+ * Returns: { nonce, message, expiresAt } — client signs `message` with their Solana keypair.
+ */
+router.post('/challenge', async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+
+    if (!walletAddress || typeof walletAddress !== 'string' ||
+        !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletAddress)) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+
+    const challenge = issueChallenge(walletAddress);
+    console.log(`[AUTH] Challenge issued for ${walletAddress.slice(0, 8)}...`);
+    return res.json(challenge);
+  } catch (err) {
+    console.error('[AUTH] Challenge error:', err.message);
+    return res.status(500).json({ error: 'Failed to issue challenge' });
+  }
+});
 
 /**
  * POST /api/auth/connect

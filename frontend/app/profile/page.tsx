@@ -12,19 +12,17 @@ import { api } from '@/lib/api';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import {
   ArrowLeft, DollarSign, Trophy, History, TrendingUp, TrendingDown,
-  Plus, Clock, Gamepad2, Target, Loader2, ArrowDownRight, ArrowUpRight,
+  Clock, Gamepad2, Target, Loader2, ArrowDownRight, ArrowUpRight,
   ArrowLeftRight, Wallet, Copy, Check, LogOut,
 } from 'lucide-react';
 
 type Tab = 'wallet' | 'history' | 'stats';
 
 export default function ProfilePage() {
-  const { player, walletAddress, refreshBalance, refreshPlayer, disconnectWallet } = useAuth();
+  const { player, walletAddress, refreshPlayer, disconnectWallet } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('wallet');
-  const [depositAmount, setDepositAmount] = useState('');
-  const [depositing, setDepositing] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [gameHistory, setGameHistory] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -49,23 +47,6 @@ export default function ProfilePage() {
     } catch (err) { console.error('Fetch error:', err); }
     finally { setLoadingData(false); }
   };
-
-  const handleDeposit = async () => {
-    const amount = parseFloat(depositAmount);
-    if (!amount || amount <= 0) return;
-    setDepositing(true);
-    try { await api.deposit(amount); await refreshBalance(); await refreshPlayer(); setDepositAmount(''); fetchData(); }
-    catch (err: any) { alert(err.message); }
-    finally { setDepositing(false); }
-  };
-
-  const quickDeposit = async (amount: number) => {
-    setDepositing(true);
-    try { await api.deposit(amount); await refreshBalance(); await refreshPlayer(); fetchData(); }
-    catch (err: any) { alert(err.message); }
-    finally { setDepositing(false); }
-  };
-
   const copyAddress = async () => {
     if (!walletAddress) return;
     await navigator.clipboard.writeText(walletAddress);
@@ -77,8 +58,9 @@ export default function ProfilePage() {
 
   const getTxIcon = (type: string) => {
     switch (type) {
-      case 'deposit': return <ArrowDownRight className="w-4 h-4 text-neon-green" />;
-      case 'withdrawal': return <ArrowUpRight className="w-4 h-4 text-neon-red" />;
+      case 'deposit': case 'onchain_payment': case 'wager_pay': return <ArrowDownRight className="w-4 h-4 text-neon-green" />;
+      case 'withdrawal': case 'onchain_refund': return <ArrowUpRight className="w-4 h-4 text-neon-red" />;
+      case 'onchain_payout': return <Trophy className="w-4 h-4 text-gold-400" />;
       case 'wager_lock': return <Target className="w-4 h-4 text-neon-blue" />;
       case 'wager_win': return <Trophy className="w-4 h-4 text-gold-400" />;
       default: return <Clock className="w-4 h-4 text-white/40" />;
@@ -87,7 +69,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-dark">
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-5xl mx-auto px-4 lg:px-8 py-6">
         <div className="flex items-center justify-between mb-6">
           <button onClick={() => router.push('/')} className="flex items-center gap-2 text-white/40 hover:text-white transition-colors">
             <ArrowLeft className="w-4 h-4" /><span className="text-sm">{t.back}</span>
@@ -135,26 +117,15 @@ export default function ProfilePage() {
         {/* WALLET TAB */}
         {tab === 'wallet' && (
           <div className="space-y-4">
+            {/* On-chain deposits — direct deposits are no longer supported by the API */}
             <div className="card">
               <h3 className="text-sm font-medium text-white/50 mb-3">{t.profile.depositUsdc}</h3>
-              <div className="flex gap-2">
-                <input type="number" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)}
-                  placeholder={t.profile.amount} className="input-dark flex-1" min="1" step="1" />
-                <button onClick={handleDeposit} disabled={depositing || !depositAmount} className="btn-neon flex items-center gap-2">
-                  {depositing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}{t.profile.deposit}
-                </button>
-              </div>
-              <p className="text-xs text-white/30 mt-2">{t.profile.demoMode}</p>
-            </div>
-            <div className="card">
-              <h3 className="text-sm font-medium text-white/50 mb-3">{t.profile.quickDeposit}</h3>
-              <div className="grid grid-cols-4 gap-3">
-                {[10, 25, 50, 100].map((amount) => (
-                  <button key={amount} onClick={() => quickDeposit(amount)} disabled={depositing} className="stake-btn text-center">
-                    <div className="text-lg font-bold">{amount}</div>
-                    <div className="text-xs text-white/40">{t.usdc}</div>
-                  </button>
-                ))}
+              <div className="flex items-start gap-3 bg-dark-700 rounded-xl p-4">
+                <Wallet className="w-5 h-5 text-gold-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-white/70">Deposits happen on-chain via Solana Pay.</p>
+                  <p className="text-xs text-white/30 mt-1">Your stakes are sent directly from your wallet when you join a match — no pre-deposit needed. Payouts and refunds arrive straight to your wallet.</p>
+                </div>
               </div>
             </div>
             <div className="card">
@@ -216,7 +187,7 @@ export default function ProfilePage() {
                   <div className="text-right">
                     <div className={`font-bold ${game.result === 'won' ? 'text-neon-green' : game.result === 'lost' ? 'text-neon-red' : 'text-white/40'}`}>
                       {game.result === 'won' ? '+' : game.result === 'lost' ? '-' : ''}
-                      {(game.stakeAmount * 2 * 0.97).toFixed(2)} {t.usdc}
+                      {(game.stakeAmount * 2 * 0.95).toFixed(2)} {t.usdc}
                     </div>
                     <div className="text-xs text-white/30">{game.completedAt ? new Date(game.completedAt).toLocaleDateString() : ''}</div>
                   </div>
@@ -233,7 +204,7 @@ export default function ProfilePage() {
               <div className="card text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto text-white/30" /></div>
             ) : stats ? (
               <>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="card text-center">
                     <Gamepad2 className="w-8 h-8 mx-auto text-neon-blue mb-2" />
                     <div className="text-3xl font-bold">{stats.total_games_played}</div>

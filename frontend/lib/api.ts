@@ -1,7 +1,9 @@
 // ============================================================
 // CryptoChess - API Client (Wallet-Based)
-// No JWT — uses x-wallet-address header
+// No JWT — uses x-wallet-address header + optional ownership signature
 // ============================================================
+
+import { getAuthSignature } from './wallet-signature';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
 
@@ -27,6 +29,12 @@ class ApiClient {
 
     if (wallet) {
       headers['x-wallet-address'] = wallet;
+      // Proof of ownership (only for real keypair-backed wallets)
+      try {
+        Object.assign(headers, await getAuthSignature());
+      } catch {
+        // Signature is optional — temp wallets keep working
+      }
     }
 
     const res = await fetch(`${this.baseUrl}${endpoint}`, {

@@ -126,7 +126,7 @@ const en = {
     stake: 'Stake:',
     you: 'You',
     prizePool: 'Prize Pool',
-    fee: '3% fee',
+    fee: '5% fee',
     yourTurnIndicator: 'YOUR TURN',
     waitingForOpponent: 'Waiting for opponent...',
     vs: 'vs',
